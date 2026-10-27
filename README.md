@@ -266,7 +266,14 @@ npm run build       # production build
 npm run start       # serve the build
 npm run typecheck   # tsc --noEmit
 npm run selftest    # 29 security tests, no database and no network needed
+npm run e2e         # the §7 workflows against a running app + real database
 ```
+
+`npm run e2e` ([scripts/e2e.mts](scripts/e2e.mts)) drives §7 end to end against a live server: it bootstraps its
+own accounts, creates rooms/sites/credentials, then asserts the locked-vault refusal, unlock, reveal, re-lock,
+archive/restore, delete confirmation, every search facet, password + username rotation, and that both export
+formats stay secret-free. It cleans up after itself; the two auth users it creates stay in Supabase Auth (delete
+them from the dashboard, or run with `WEBVAULT_E2E_KEEP=1` first). Point it elsewhere with `WEBVAULT_E2E_BASE`.
 
 `npm run selftest` ([scripts/security-selftest.mts](scripts/security-selftest.mts)) runs the parts that must never
 regress silently: the AES-GCM envelope (round-trip, fresh IV per write, tag tamper rejection, unknown key

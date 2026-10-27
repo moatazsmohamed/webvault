@@ -9,6 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "selftest": "node --no-warnings --experimental-strip-types scripts/selftest.mjs",
+    "e2e": "node --no-warnings --experimental-strip-types scripts/e2e.mts",
     "lint": "next lint"
   },
   "dependencies": {
