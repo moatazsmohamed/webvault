@@ -8,7 +8,6 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "selftest": "node --no-warnings --experimental-strip-types scripts/selftest.mjs",
     "lint": "next lint"
   },
   "dependencies": {

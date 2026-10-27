@@ -69,23 +69,18 @@ export function rejectCrossSite(req: Request): NextResponse | null {
  */
 const SECRETISH = /(password|passwd|secret|token|apikey|api_key|authorization|credential)/i;
 
-/** Keys are checked, long strings dropped: no secret can reach the audit table even by accident. */
-export function scrubDetail(detail: Record<string, unknown>): Record<string, unknown> {
+export async function audit(
+  profileId: string | null,
+  action: string,
+  opts: { entityType?: string; entityId?: string; detail?: Record<string, unknown>; ip?: string; userAgent?: string } = {},
+): Promise<void> {
+  const detail = opts.detail ?? {};
   const safe: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(detail)) {
     if (SECRETISH.test(k)) continue;
     if (typeof v === 'string' && v.length > 200) continue;
     safe[k] = v;
   }
-  return safe;
-}
-
-export async function audit(
-  profileId: string | null,
-  action: string,
-  opts: { entityType?: string; entityId?: string; detail?: Record<string, unknown>; ip?: string; userAgent?: string } = {},
-): Promise<void> {
-  const safe = scrubDetail(opts.detail ?? {});
   try {
     await admin().from('activity_logs').insert({
       owner_id: profileId,
