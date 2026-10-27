@@ -60,13 +60,14 @@ export function blindIndex(value: string): string {
 /** What the UI shows before anyone unlocks the vault: "a…n" for "admin@x.com". */
 export function hint(value: string): string {
   const v = value.trim();
-  if (v.length <= 2) return '••';
+  // Below five characters a two-each-side mask would show most of the value back.
+  if (v.length <= 4) return '••••';
   return `${v.slice(0, 2)}${'•'.repeat(Math.min(6, Math.max(3, v.length - 4)))}${v.slice(-2)}`;
 }
 
 // ─── password verifier for the re-auth-before-reveal step ────────────────────
 
-const SCRYPT = { N: 32768, r: 8, p: 1, keylen: 64 } as const;
+const SCRYPT = { N: 32768, r: 8, p: 1, keylen: 64, maxmem: 64 * 1024 * 1024 } as const;
 
 export function makePasswordVerifier(password: string): { salt: string; hash: string } {
   const salt = crypto.randomBytes(16).toString('base64');
@@ -74,8 +75,10 @@ export function makePasswordVerifier(password: string): { salt: string; hash: st
 }
 
 function scrypt(password: string, salt: string): string {
+  // N=32768,r=8 needs 32 MB of scratch memory, which is exactly Node's default
+  // cap — the real usage is higher, so maxmem has to be raised or scrypt throws.
   return crypto.scryptSync(password, Buffer.from(salt, 'base64'), SCRYPT.keylen, {
-    N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, cost: SCRYPT.N, blockSize: SCRYPT.r, parallelization: SCRYPT.p,
+    N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, maxmem: SCRYPT.maxmem,
   }).toString('base64');
 }
 

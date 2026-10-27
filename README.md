@@ -197,7 +197,7 @@ Logins use a **username**; internally it maps to the non-routable address
 | Symptom | Cause |
 | --- | --- |
 | `Missing environment variables: …` on every page | `.env.local` is missing a value, or Vercel env vars were set after the deploy — redeploy |
-| Setup form shows **Sign in** instead, and submitting says "Setup is closed" | the migration never ran, so `webvault_is_first_run` fails and the app fails **closed** — re-run §4.2 |
+| The login page never offers setup, and `PUT /api/auth/login` says "Setup is closed" | the migration never ran, so `webvault_is_first_run` fails and the app fails **closed** — re-run §4.2 |
 | Sign-in says "Invalid credentials" with the right password | the profile row was deleted, or the username's case/spacing differs — usernames are stored lowercase |
 | Reveal says "This record could not be decrypted with the current key" | `WEBVAULT_ENC_KEY` changed since the row was written — restore the old key or re-enter that credential |
 | 429 on login | the 5-attempts lock is active; wait 15 minutes, or unlock from the SQL editor with `delete from auth_attempts where key like 'login:%';` |
@@ -265,7 +265,16 @@ npm run dev         # local dev
 npm run build       # production build
 npm run start       # serve the build
 npm run typecheck   # tsc --noEmit
+npm run selftest    # 29 security tests, no database and no network needed
 ```
+
+`npm run selftest` ([scripts/security-selftest.mts](scripts/security-selftest.mts)) runs the parts that must never
+regress silently: the AES-GCM envelope (round-trip, fresh IV per write, tag tamper rejection, unknown key
+version), the masked hint, the blind index, the scrypt verifier, the unlock token (expiry, wrong purpose,
+tampered MAC), the audit scrubber, URL/status/enum validation, the 12-character password floor, and the i18n
+dictionary (both languages for every key, plus every audit action having a label). It needs no Supabase
+project, so it runs on any machine — including CI.
+
 
 ## 9. Known limits
 
