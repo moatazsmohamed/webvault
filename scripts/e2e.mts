@@ -197,10 +197,16 @@ async function nukeE2eAccounts(): Promise<void> {
     const res = await fetch(`${base}/auth/v1/admin/users/${user.id}`, { method: 'DELETE', headers });
     if (!res.ok && res.status !== 404) throw new Error(`could not remove an e2e account (${res.status})`);
   }
-  console.log(`  removed ${e2e.length} leftover e2e account(s)`);
+  const left = await fetch(`${base}/rest/v1/profiles?select=id`, { headers: { ...headers, prefer: 'count=exact', range: '0-0', range_unit: 'item' } });
+  console.log(`  removed ${e2e.length} leftover e2e account(s) — ${left.headers.get('content-range')?.split('/')[1] ?? '?'} profile(s) in the database`);
 }
 
 console.log(`\nWebVault end-to-end — ${BASE}\n`);
+
+if (process.argv.includes('--reset-only')) {
+  await nukeE2eAccounts();
+  process.exit(0);
+}
 
 // ── pre-flight: is the server reachable at all ───────────────────────────────
 const reachable = await fetch(BASE + '/login').then(r => r.status).catch(() => 0);

@@ -275,9 +275,9 @@ npm run e2e         # the §7 workflows against a running app + real database
 own accounts, creates rooms/sites/credentials, then asserts the locked-vault refusal, unlock, reveal, re-lock,
 archive/restore, delete confirmation, every search facet, password + username rotation, and that both export
 formats stay secret-free. It reads the setup and invite keys from `.env.local`, so `npm run e2e` needs no extra
-configuration. It cleans up after itself; the two auth users it creates stay in Supabase Auth (`--fresh` removes
-them at the start of the next run, `WEBVAULT_E2E_KEEP=1` keeps them for inspection). Point it elsewhere with
-`WEBVAULT_E2E_BASE`.
+configuration. It cleans up after itself; `--fresh` removes the two auth users it leaves behind before a rerun,
+and `--reset-only` removes them without running anything (`WEBVAULT_E2E_KEEP=1` keeps them for inspection).
+Point it elsewhere with `WEBVAULT_E2E_BASE`.
 
 `npm run selftest` ([scripts/security-selftest.mts](scripts/security-selftest.mts)) runs the parts that must never
 regress silently: the AES-GCM envelope (round-trip, fresh IV per write, tag tamper rejection, unknown key
