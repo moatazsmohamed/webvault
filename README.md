@@ -199,6 +199,7 @@ Logins use a **username**; internally it maps to the non-routable address
 | Symptom | Cause |
 | --- | --- |
 | `Missing environment variables: …` on every page | `.env.local` is missing a value, or Vercel env vars were set after the deploy — redeploy |
+| Every page is **500** and the runtime log says `Your project's URL and Key are required to create a Supabase client!` | `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` is absent from the deployment's environment (or was saved under the wrong name) — check §5 step 2, then redeploy |
 | The login page never offers setup, and `PUT /api/auth/login` says "Setup is closed" | the migration never ran, so `webvault_is_first_run` fails and the app fails **closed** — re-run §4.2 |
 | Sign-in says "Invalid credentials" with the right password | the profile row was deleted, or the username's case/spacing differs — usernames are stored lowercase |
 | Reveal says "This record could not be decrypted with the current key" | `WEBVAULT_ENC_KEY` changed since the row was written — restore the old key or re-enter that credential |
@@ -211,9 +212,17 @@ Logins use a **username**; internally it maps to the non-routable address
 
 1. Push the repo to GitHub, **Import** it in Vercel (framework autodetects Next.js; Node 20+).
 2. **Settings → Environment Variables** — add the values from §4.3 (`NEXT_PUBLIC_APP_URL=https://your-domain`).
+   Check the names, one per line, before deploying: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `WEBVAULT_ENC_KEY`, `WEBVAULT_SESSION_SECRET`, `WEBVAULT_SETUP_KEY`, `NEXT_PUBLIC_APP_URL`. A misspelled
+   name costs a silent production outage, not a build failure — the build never reads these values.
 3. Deploy. Then in Supabase → **Authentication → URL Configuration**, set **Site URL** to the same origin.
 4. Open the deployment once to run the setup form, and clear `WEBVAULT_SETUP_KEY` right after.
-5. Re-check: `curl -I https://your-domain/dashboard` should show the CSP, HSTS and `X-Frame-Options` headers.
+5. Re-check: `curl -I https://your-domain/dashboard` should show the CSP, HSTS and `X-Frame-Options` headers,
+   and `curl https://your-domain/api/auth/login` should answer `{"ok":true,"firstRun":true}` (or
+   `{"ok":true,"firstRun":false}` once an account exists). Every page returning **500** with
+   `URL and Key are required to create a Supabase client` in the runtime logs means one of the two Supabase
+   variables is missing or holds the wrong value; after fixing it, **redeploy** — Vercel does not restart a
+   running deployment with new env values.
 
 Do not deploy `master` with a `.env` file inside the repo, and never paste the service-role key into a chat,
 issue or screenshot.
