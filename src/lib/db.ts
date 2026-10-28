@@ -287,8 +287,9 @@ async function syncTags(owner: string, websiteId: string, names: string[]): Prom
 
 async function syncUrls(owner: string, websiteId: string, urls: Partial<Record<UrlKind, string | null>>): Promise<void> {
   const db = admin();
-  for (const kind of URL_KINDS) {
-    const value = urls?.[kind]?.trim();
+  for (const [kind, raw] of Object.entries(urls ?? {})) {
+    if (!URL_KINDS.includes(kind as UrlKind)) continue;
+    const value = raw?.trim();
     if (!value) {
       await db.from('website_urls').delete().eq('website_id', websiteId).eq('kind', kind);
       continue;
