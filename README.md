@@ -210,8 +210,8 @@ cp .env.example .env.local
 | `WEBVAULT_SESSION_SECRET` | yes | ≥48 hex chars — HMAC for the 5-minute unlock cookie **and** for recovery codes |
 | `WEBVAULT_SETUP_KEY` | first run only | extra gate for the `/login` setup screen; clear it once your account exists |
 | `WEBVAULT_INVITE_KEY` | no | reopens account creation after the first run, for a second account or the test runner; leave unset in normal use |
-| `RESEND_API_KEY` | for recovery | [resend.com](https://resend.com) → API Keys. Unset ⇒ `/reset-password` is disabled and the login page hides the "forgot password" link |
-| `RESEND_FROM` | for recovery | verified sender, e.g. `WebVault <vault@your-domain>` — Resend rejects unverified domains; the free `onboarding@resend.dev` address only mails your own Resend account |
+| `RESEND_API_KEY` | for recovery | [resend.com](https://resend.com) → API Keys. This one variable is the whole transport: unset ⇒ `/reset-password` is disabled and the login page hides the "forgot password" link |
+| `RESEND_FROM` | no | only once you verify your own domain in Resend. Unset it falls back to `WebVault <onboarding@resend.dev>`, which delivers **only** to the address your Resend account was created with |
 | `WEBVAULT_MAIL_OUTBOX` | test only | file path: recovery codes are appended as JSON lines instead of mailed. **Ignored in production** (`NODE_ENV=production`), so it can never leak a code from the deployed vault |
 | `NEXT_PUBLIC_APP_URL` | for prod | your public origin, used in export headers |
 

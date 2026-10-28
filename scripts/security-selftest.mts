@@ -24,7 +24,7 @@ const { encrypt, decrypt, blindIndex, hint, makePasswordVerifier, verifyPassword
   await import('../src/lib/crypto.ts');
 const { parse, httpUrl, roomCreate, websiteCreate, credentialCreate, setupInput, passwordChangeInput, urlsInput, recoveryEmailInput, passwordResetInput } =
   await import('../src/lib/validation.ts');
-const { env } = await import('../src/lib/env.ts');
+const { env, DEFAULT_SENDER } = await import('../src/lib/env.ts');
 const { mailEnabled, maskEmail, RECOVERY_TTL_SECONDS, RECOVERY_MAX_ATTEMPTS } = await import('../src/lib/mail.ts');
 const { translate, DICT, activityLabel } = await import('../src/lib/i18n.ts');
 const { hostOf, formatDate } = await import('../src/lib/format.ts');
@@ -322,6 +322,7 @@ test('the reset endpoint only accepts a six-digit code and a strong new password
 test('recovery email stays off until a transport is configured', () => {
   assert.equal(env.mailReady, false, 'selftest must never hold real Resend keys');
   assert.equal(mailEnabled(), false, 'without a transport or an outbox nothing can be sent');
+  assert.equal(env.resendFrom, DEFAULT_SENDER, 'the sender must fall back to the Resend sandbox address');
   assert.equal(RECOVERY_TTL_SECONDS, 600);
   assert.equal(RECOVERY_MAX_ATTEMPTS, 5);
 });

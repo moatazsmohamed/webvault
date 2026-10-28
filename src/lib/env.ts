@@ -29,6 +29,9 @@ function base64Key(name: string, value: string): Buffer {
   return buf;
 }
 
+/** Resend's sandbox sender: it only ever delivers to the address the Resend account was created with. */
+export const DEFAULT_SENDER = 'WebVault <onboarding@resend.dev>';
+
 const raw = {
   url: required('SUPABASE_URL', process.env.SUPABASE_URL),
   serviceKey: required('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY),
@@ -38,7 +41,7 @@ const raw = {
   inviteKey: process.env.WEBVAULT_INVITE_KEY?.trim() ?? '',
   appUrl: process.env.NEXT_PUBLIC_APP_URL?.trim() || '',
   resendKey: process.env.RESEND_API_KEY?.trim() ?? '',
-  resendFrom: process.env.RESEND_FROM?.trim() ?? '',
+  resendFrom: process.env.RESEND_FROM?.trim() || DEFAULT_SENDER,
   // Dev/test only: append the outbound message to this file instead of sending it.
   mailOutbox: process.env.WEBVAULT_MAIL_OUTBOX?.trim() ?? '',
 };
@@ -65,9 +68,9 @@ export const env = {
   get missing(): readonly string[] {
     return MISSING;
   },
-  /** Recovery email works when Resend is configured; the outbox is a non-production escape hatch. */
+  /** One variable is enough to switch recovery on: the sender falls back to the Resend sandbox address. */
   get mailReady(): boolean {
-    return !!(raw.resendKey && raw.resendFrom);
+    return !!raw.resendKey;
   },
 };
 
