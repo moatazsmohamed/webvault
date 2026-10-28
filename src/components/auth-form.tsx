@@ -7,7 +7,9 @@ import { Field, LocaleProvider, Spinner, useLocale } from './ui';
 import { ApiError, api } from '@/lib/client-api';
 import type { Locale } from '@/lib/types';
 
-export function AuthForm({ mode }: { mode: 'login' | 'setup' }) {
+export type AuthMode = 'login' | 'setup' | 'reset';
+
+export function AuthForm({ mode, canRecover = false }: { mode: 'login' | 'setup'; canRecover?: boolean }) {
   const { t } = useLocale();
   const router = useRouter();
   const [username, setUsername] = useState('');
@@ -115,6 +117,13 @@ export function AuthForm({ mode }: { mode: 'login' | 'setup' }) {
         {mode === 'login' ? (busy ? t('signing_in') : t('sign_in')) : t('create_account')}
       </button>
 
+      {mode === 'login' && canRecover ? (
+        <a href="/reset-password" className="btn btn-ghost w-full">
+          <Icon name="key" size={15} />
+          {t('forgot_password')}
+        </a>
+      ) : null}
+
       <p className="flex items-start justify-center gap-2 text-center text-xs faint">
         <Icon name="lock" size={13} />
         <span>{t('note_hashed')}</span>
@@ -140,7 +149,7 @@ function PublicLocaleToggle({ locale }: { locale: Locale }) {
   );
 }
 
-export function AuthShell({ locale, mode, children }: { locale: Locale; mode: 'login' | 'setup'; children: ReactNode }) {
+export function AuthShell({ locale, mode, children }: { locale: Locale; mode: AuthMode; children: ReactNode }) {
   return (
     <LocaleProvider locale={locale}>
       <main className="flex min-h-dvh items-center justify-center px-4 py-10">
@@ -161,22 +170,22 @@ export function AuthShell({ locale, mode, children }: { locale: Locale; mode: 'l
   );
 }
 
-function AuthHeadlines({ mode }: { mode: 'login' | 'setup' }) {
+function AuthHeadlines({ mode }: { mode: AuthMode }) {
   const { t } = useLocale();
   return (
     <div>
       <p className="text-sm font-semibold leading-tight">{t('app_name')}</p>
-      <p className="text-xs faint">{mode === 'setup' ? t('first_run_title') : t('app_tagline')}</p>
+      <p className="text-xs faint">{mode === 'setup' ? t('first_run_title') : mode === 'reset' ? t('reset_title') : t('app_tagline')}</p>
     </div>
   );
 }
 
-export function AuthTitle({ mode }: { mode: 'login' | 'setup' }) {
+export function AuthTitle({ mode }: { mode: AuthMode }) {
   const { t } = useLocale();
   return (
     <div className="mb-5 flex flex-col gap-1.5">
-      <h1 className="text-xl font-semibold">{mode === 'login' ? t('login_title') : t('first_run_title')}</h1>
-      <p className="text-sm muted">{mode === 'login' ? t('login_subtitle') : t('first_run_body')}</p>
+      <h1 className="text-xl font-semibold">{mode === 'login' ? t('login_title') : mode === 'reset' ? t('reset_title') : t('first_run_title')}</h1>
+      <p className="text-sm muted">{mode === 'login' ? t('login_subtitle') : mode === 'reset' ? t('reset_subtitle') : t('first_run_body')}</p>
     </div>
   );
 }

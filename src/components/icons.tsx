@@ -45,6 +45,7 @@ export const GLYPHS = {
   spark: (p: P) => (<svg {...base(p)}><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18" /></svg>),
   download: (p: P) => (<svg {...base(p)}><path d="M12 4v10M8 11l4 4 4-4" /><path d="M5 19h14" /></svg>),
   filter: (p: P) => (<svg {...base(p)}><path d="M4 6h16l-6 7v5l-4 2v-7z" /></svg>),
+  mail: (p: P) => (<svg {...base(p)}><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="m4 7 8 6 8-6" /></svg>),
 };
 
 export type IconName = keyof typeof GLYPHS;

@@ -2,7 +2,8 @@
 
 A private, single-owner dashboard for every website you build: rooms (clients/projects), websites with five
 named link slots, and an **encrypted credentials vault**. Real database, real authentication, encrypted at
-rest, bilingual (Arabic RTL / English LTR), dark and light themes.
+rest, a one-time-code **password recovery** flow over email, bilingual (Arabic RTL / English LTR), dark and light
+themes.
 
 Stack: **Next.js 15 (App Router) + TypeScript (strict) + Tailwind + Supabase Postgres + Supabase Auth**.
 The browser never talks to Postgres. Every read and write goes through a server-side route that has already
@@ -23,6 +24,7 @@ Next.js route handlers  ── guard() ──► Supabase Auth: getUser()  ─�
 src/lib/db.ts  ──────────────────────  Supabase Postgres (RLS: deny-all)
    │
    ├── crypto.ts   AES-256-GCM envelope encryption + HMAC blind index + scrypt verifier
+   ├── mail.ts     recovery codes via the Resend HTTP API (the digits never reach a log or a response)
    └── audit       every mutating action → activity_logs (with a no-secrets CHECK in SQL)
 ```
 
@@ -51,9 +53,10 @@ still answers 401 (`guard()`).
 | All DB access | `src/lib/db.ts` |
 | Zod input schemas | `src/lib/validation.ts` |
 | HTTP helpers, CSRF gate, audit | `src/lib/api.ts` |
+| Recovery-code email transport | `src/lib/mail.ts` |
 | i18n dictionary (server + client) | `src/lib/i18n.ts` |
-| API routes | `src/app/api/**` (15 handlers) |
-| Pages | `src/app/login`, `src/app/(app)/**` |
+| API routes | `src/app/api/**` (17 handlers) |
+| Pages | `src/app/login`, `src/app/reset-password`, `src/app/(app)/**` |
 | Components | `src/components/**` |
 
 ---
@@ -65,17 +68,20 @@ Enums: `url_kind` (`live|admin|developer|source|hosting`), `website_status`
 
 | Table | Purpose | Notes |
 | --- | --- | --- |
-| `profiles` | app-side identity | `id` = Supabase `auth.users.id`, unique `username`, `locale`, `theme`, `reveal_salt`/`reveal_hash` (scrypt verifier) |
+| `profiles` | app-side identity | `id` = Supabase `auth.users.id`, unique `username`, `locale`, `theme`, `reveal_salt`/`reveal_hash` (scrypt verifier), `recovery_email` (opt-in reset address), `sessions_revoked_at` (evicts older JWTs) |
 | `rooms` | project/client groupings | `slug` CHECK `^[a-z0-9][a-z0-9-]{1,60}$`, `icon` CHECK `^[a-z0-9_-]{1,32}$`, `color`, `archived_at` |
 | `websites` | one site | status, category, client, description, notes, thumbnail, `last_accessed_at` |
 | `website_urls` | the five link slots | unique `(website_id, kind)`, URL CHECK `^https?://…` — never stores credentials in the URL |
 | `credentials` | the vault | `login_url`, `account_type`, `username_enc`, `password_enc`, `note_enc`, `username_idx` (blind index), `username_hint` (masked) |
 | `tags` / `website_tags` | free tagging | unique label per owner |
 | `activity_logs` | audit trail | action, entity, detail (jsonb), ip, user-agent + `log_no_secrets` CHECK |
-| `auth_attempts` | throttling state | keyed counter with `locked_until` |
+| `auth_attempts` | throttling state | keyed counter with `locked_until` — also holds the reset-code send/verify budget |
+| `password_resets` | one live reset per account | `code_hash` (HMAC, never the digits), `expires_at`, `attempts`, `consumed_at`; older rows are expired on `begin` |
 
 RPCs: `auth_take_attempt`, `auth_clear_attempt`, `auth_attempt_state`, `webvault_is_first_run`,
-`webvault_room_stats` (site / dashboard / incomplete counts in one call), `touch_updated_at()` trigger.
+`webvault_room_stats` (site / dashboard / incomplete counts in one call), `webvault_begin_reset`,
+`webvault_consume_reset` (row-locked compare + attempt bump), `webvault_complete_reset` (revoke sessions,
+delete the code), `touch_updated_at()` trigger.
 
 Deleting is **soft**: rooms and websites set `archived_at`; you can restore from the UI. Hard delete only
 happens from the explicit delete dialog, which requires typing `DELETE`, and it cascades the site's URLs and
@@ -103,6 +109,26 @@ valid session → vault unlocked (fresh `wv_unlock` cookie) → row belongs to `
 **Login throttling** — **5 failures → 15-minute lock**, tracked separately per IP *and* per username, in
 `auth_attempts` (DB-side, so it survives restarts and multi-instance deploys). Same message for "no such user"
 and "wrong password" — no account enumeration.
+
+**Password recovery** ([/api/auth/forgot](src/app/api/auth/forgot/route.ts),
+[/api/auth/reset](src/app/api/auth/reset/route.ts), [/reset-password](src/app/reset-password/page.tsx)) — opt-in
+per account: Settings stores a `recovery_email`, and the "forgot password" link only appears while the transport
+is configured. Flow: username → 6-digit code by email (10-minute TTL, single use, **5** verify attempts) → new
+password. Hardening:
+
+- the code is stored as `HMAC-SHA256(WEBVAULT_SESSION_SECRET, "<userId>.<code>")` — a DB dump cannot mint one,
+  and the plaintext digits never touch logs, responses or the audit trail;
+- **no enumeration**: `POST /api/auth/forgot` always answers `{"ok":true}`, whether or not the username exists,
+  whether or not it has a recovery address, and whether or not the mail arrived — delivery is recorded only in
+  the audit row;
+- **rate limited** to 3 sends per 15 minutes per username *and* per IP, reusing `auth_attempts`, so the counters
+  advance even for unknown usernames (a probe cannot measure the ceiling for free);
+- the verify is a single `webvault_consume_reset` RPC with `for update` — no read-then-write race — and the code
+  is marked consumed on the same statement that matched it;
+- completing a reset sets `profiles.sessions_revoked_at`, so every token issued earlier fails `requireProfile()`
+  (JWT `iat` compared in [src/lib/auth.ts](src/lib/auth.ts)) — the stolen laptop's session dies with the password;
+- changing the password this way **does not** lock the vault: credential envelopes are keyed by
+  `WEBVAULT_ENC_KEY`, not derived from the account password, so old secrets stay readable after a reset.
 
 **Session** — Supabase auth cookie, `httpOnly`, server-verified on every request; logout calls
 `signOut()` and clears cookies. UI preference cookies (`wv_locale`, `wv_theme`) are not security-relevant.
@@ -138,7 +164,8 @@ or weak value (`assertEnv()` at the top of every handler).
 | Brute-force login | 5/15 min per IP **and** per username |
 | Shoulder-surfing / always-on reveal | unlock expires in 5 min, reveal re-masks in 60 s, hint only until unlock |
 | Bulk exfiltration of the vault | 20 reveals / 10 min + every reveal is audited |
-| Leaked `.env` on a shared host | everything above except the enc key — **rotate** (see §6) |
+| Password forgotten / account taken over | 6-digit code to the opt-in recovery address: 10 min TTL, single use, 5 tries, 3 sends / 15 min, all older sessions revoked |
+| Leaked `.env` on a shared host | everything above except the enc key — **rotate** (see §6). `WEBVAULT_SESSION_SECRET` also signs recovery codes and `RESEND_API_KEY` can mail them, so both go in the same rotation |
 | Owner's own device compromised | out of scope: the vault must be readable on the machine you unlock it from |
 | Insider / second user | not supported — single owner by design |
 
@@ -156,11 +183,14 @@ Deploy it on HTTPS only (Vercel gives you this). Do not run the vault over plain
 4. **Authentication → Settings**: set "Enable RLS" default as you like — the migration hardens the tables itself.
 
 ### 4.2 Apply the schema
-Open **SQL Editor**, paste the whole of `supabase/migrations/0001_init.sql`, press **Run**.
+Open **SQL Editor**, paste the whole of `supabase/migrations/0001_init.sql`, press **Run**. Then do the same with
+`supabase/migrations/0002_password_reset.sql` — it adds the recovery columns, the `password_resets` table and the
+three reset RPCs. The `profiles` select lists those columns, so a project with only 0001 makes every signed-in
+page fail.
 > The Supabase editor only executes the text you have *selected* — select all (Ctrl+A) first, or it runs a
 > fragment and reports success.
 
-It is idempotent (`if not exists` / `create or replace`), so re-running is safe.
+Both files are idempotent (`if not exists` / `create or replace`), so re-running is safe.
 
 ### 4.3 Local environment
 ```bash
@@ -177,8 +207,12 @@ cp .env.example .env.local
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | server-side only; bypasses RLS, so it is the one key to guard |
 | `WEBVAULT_ENC_KEY` | yes | base64, decodes to exactly 32 bytes — AES-256 key for the vault |
 | `WEBVAULT_SESSION_SECRET` | yes | ≥48 hex chars — HMAC for the 5-minute unlock cookie |
+| `WEBVAULT_SESSION_SECRET` | yes | ≥48 hex chars — HMAC for the 5-minute unlock cookie **and** for recovery codes |
 | `WEBVAULT_SETUP_KEY` | first run only | extra gate for the `/login` setup screen; clear it once your account exists |
 | `WEBVAULT_INVITE_KEY` | no | reopens account creation after the first run, for a second account or the test runner; leave unset in normal use |
+| `RESEND_API_KEY` | for recovery | [resend.com](https://resend.com) → API Keys. Unset ⇒ `/reset-password` is disabled and the login page hides the "forgot password" link |
+| `RESEND_FROM` | for recovery | verified sender, e.g. `WebVault <vault@your-domain>` — Resend rejects unverified domains; the free `onboarding@resend.dev` address only mails your own Resend account |
+| `WEBVAULT_MAIL_OUTBOX` | test only | file path: recovery codes are appended as JSON lines instead of mailed. **Ignored in production** (`NODE_ENV=production`), so it can never leak a code from the deployed vault |
 | `NEXT_PUBLIC_APP_URL` | for prod | your public origin, used in export headers |
 
 ### 4.4 Run and create your account
@@ -194,6 +228,11 @@ user, writes your `profiles` row and signs you in. Afterwards setup **closes**: 
 Logins use a **username**; internally it maps to the non-routable address
 `<username>@vault.webvault.app`, so Supabase's email-based auth never needs a real inbox.
 
+**To enable "forgot password"**: set `RESEND_API_KEY` + `RESEND_FROM`, then in **Settings → استعادة كلمة المرور /
+password recovery** type the inbox that should receive the codes (that field also asks for your current
+password). Without a recovery address the reset endpoints answer the same uniform `{"ok":true}` but mail
+nothing — deliberately, so a probe cannot tell an account without an address from one that has one.
+
 ### 4.5 If something fails to boot
 
 | Symptom | Cause |
@@ -204,6 +243,11 @@ Logins use a **username**; internally it maps to the non-routable address
 | Sign-in says "Invalid credentials" with the right password | the profile row was deleted, or the username's case/spacing differs — usernames are stored lowercase |
 | Reveal says "This record could not be decrypted with the current key" | `WEBVAULT_ENC_KEY` changed since the row was written — restore the old key or re-enter that credential |
 | 429 on login | the 5-attempts lock is active; wait 15 minutes, or unlock from the SQL editor with `delete from auth_attempts where key like 'login:%';` |
+| `/reset-password` bounces straight to `/login` | the "forgot password" feature is off by design on this deployment — `RESEND_API_KEY`/`RESEND_FROM` are unset (§4.3), or you hit it while already signed in |
+| `/api/auth/forgot` answers **503** | same cause: `mailEnabled()` is false, so the endpoint refuses instead of silently dropping a code |
+| `/api/auth/forgot` returns `{"ok":true}` but no code arrives | the account has no `recovery_email` set (Settings → password recovery), or Resend rejected the sender domain. The response is intentionally identical to a real send — check `select detail from activity_logs where action = 'password_reset_request' order by created_at desc limit 1;`, the `delivered` flag is only in the audit row |
+| Every reset code is rejected as invalid | `WEBVAULT_SESSION_SECRET` changed after the code was issued (the code hash is an HMAC of it) — the old codes are dead by design; request a new one |
+| "That code is not valid, or it has expired." right after a correct entry | 5 wrong tries consumed it, or 10 minutes passed — `delete from password_resets;` clears the state, and `delete from auth_attempts where key like 'reset:%';` lifts the verify lock |
 
 
 ---
@@ -213,13 +257,19 @@ Logins use a **username**; internally it maps to the non-routable address
 1. Push the repo to GitHub, **Import** it in Vercel (framework autodetects Next.js; Node 20+).
 2. **Settings → Environment Variables** — add the values from §4.3 (`NEXT_PUBLIC_APP_URL=https://your-domain`).
    Check the names, one per line, before deploying: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `WEBVAULT_ENC_KEY`, `WEBVAULT_SESSION_SECRET`, `WEBVAULT_SETUP_KEY`, `NEXT_PUBLIC_APP_URL`. A misspelled
-   name costs a silent production outage, not a build failure — the build never reads these values.
+   `WEBVAULT_ENC_KEY`, `WEBVAULT_SESSION_SECRET`, `WEBVAULT_SETUP_KEY`, `NEXT_PUBLIC_APP_URL`, and for recovery
+   `RESEND_API_KEY`, `RESEND_FROM`. A misspelled name costs a silent production outage, not a build failure —
+   the build never reads these values. Add the two Resend ones before your first open of the site: verify the
+   sending domain in Resend first, or the codes bounce to an inbox you do not control.
 3. Deploy. Then in Supabase → **Authentication → URL Configuration**, set **Site URL** to the same origin.
-4. Open the deployment once to run the setup form, and clear `WEBVAULT_SETUP_KEY` right after.
+4. Open the deployment once to run the setup form, and clear `WEBVAULT_SETUP_KEY` right after. Then set your
+   recovery address in **Settings → password recovery** — until then nobody can request a code, and the login
+   page hides the link.
 5. Re-check: `curl -I https://your-domain/dashboard` should show the CSP, HSTS and `X-Frame-Options` headers,
-   and `curl https://your-domain/api/auth/login` should answer `{"ok":true,"firstRun":true}` (or
-   `{"ok":true,"firstRun":false}` once an account exists). Every page returning **500** with
+   `curl https://your-domain/api/auth/login` should answer `{"ok":true,"firstRun":true}` (or
+   `{"ok":true,"firstRun":false}` once an account exists), and `curl -X POST https://your-domain/api/auth/forgot`
+   with `{"username":"nobody"}` should answer `{"ok":true}` — anything else means the recovery transport or the
+   0002 migration is missing. Every page returning **500** with
    `URL and Key are required to create a Supabase client` in the runtime logs means one of the two Supabase
    variables is missing or holds the wrong value; after fixing it, **redeploy** — Vercel does not restart a
    running deployment with new env values.
@@ -241,6 +291,10 @@ issue or screenshot.
 4. Only then discard the old key. `blind_index` uses the same key, so usernames must be re-hashed in the pass.
 
 Losing `WEBVAULT_ENC_KEY` makes stored passwords **unrecoverable** — there is no backdoor and no reset path.
+
+**Rotating `WEBVAULT_SESSION_SECRET`** is cheaper: it signs the unlock cookie and hashes recovery codes, so a new
+value logs everyone out and silently invalidates any outstanding code — no re-encryption pass. `delete from
+password_resets;` afterwards so nobody waits on a dead code.
 
 **Backups**
 - Supabase → Database → Backups (daily PITR on paid plans), or `pg_dump` the project on a schedule.
@@ -266,6 +320,10 @@ Losing `WEBVAULT_ENC_KEY` makes stored passwords **unrecoverable** — there is 
 9. **Search** — by name, client, room, URL, category, tag, and combinations; results never contain a password.
 10. **Settings** — change password (vault re-locks), change username (old one stops working, new one logs in),
     switch language/dir and theme, export JSON + CSV and grep the files for `password` — zero hits.
+11. **Recovery** — set a recovery address (wrong current password must be refused); from a logged-out browser ask
+    for a code with a username that exists *and* one that does not — both must answer `{"ok":true}`; a wrong code
+    must not sign you in or spend the real one; the right code sets the new password, kills the old session
+    cookie, and the stored credential still reveals after you unlock again.
 
 ---
 
@@ -276,7 +334,7 @@ npm run dev         # local dev
 npm run build       # production build
 npm run start       # serve the build
 npm run typecheck   # tsc --noEmit
-npm run selftest    # 29 security tests, no database and no network needed
+npm run selftest    # 36 security tests, no database and no network needed
 npm run e2e         # the §7 workflows against a running app + real database
 ```
 
@@ -299,5 +357,7 @@ project, so it runs on any machine — including CI.
 ## 9. Known limits
 
 Single owner — no team sharing, no per-room permissions. One vault key per deployment (no per-record keys yet).
-No TOTP/WebAuthn second factor — the password plus the 5-minute unlock window is the gate. Thumbnails are
-stored by URL, not uploaded, so there is no file-storage surface to secure.
+No TOTP/WebAuthn second factor — the password plus the 5-minute unlock window is the gate. Password recovery
+hands the account to whoever reads the recovery inbox, so it is only as strong as that mailbox — and it can
+change the login password, never read a stored credential: the vault still needs the password you type to unlock.
+Thumbnails are stored by URL, not uploaded, so there is no file-storage surface to secure.

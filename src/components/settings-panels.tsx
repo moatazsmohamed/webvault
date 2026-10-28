@@ -173,6 +173,65 @@ export function UsernameChangeForm({ username }: { username: string }) {
   );
 }
 
+export function RecoveryEmailForm({ masked, configured }: { masked: string; configured: boolean }) {
+  const { t } = useLocale();
+  const toast = useToast();
+  const router = useRouter();
+  const [value, setValue] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api.post('/api/settings/account', { action: 'recovery_email', email: value.trim(), password });
+      setValue('');
+      setPassword('');
+      toast.push('ok', t('updated_ok'));
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t('err_server'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <p className="text-xs muted">{configured ? `${t('recovery_current')}: ${masked}` : t('recovery_none')}</p>
+      {!configured ? (
+        <p className="flex items-start gap-2 text-[11px]" style={{ color: 'var(--bad)' }}>
+          <Icon name="alert" size={14} />
+          <span>{t('recovery_warning')}</span>
+        </p>
+      ) : null}
+
+      <Field label={t('recovery_email')} required hint={t('recovery_email_hint')}>
+        <input
+          className="field"
+          type="email"
+          inputMode="email"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          autoComplete="email"
+          spellCheck={false}
+          maxLength={254}
+        />
+      </Field>
+      <Field label={t('current_password')} required error={error}>
+        <input className="field" type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required maxLength={512} />
+      </Field>
+      <button type="submit" className="btn btn-ghost self-end" disabled={busy || !value.trim()}>
+        {busy ? <Spinner /> : <Icon name="mail" size={16} />}
+        {t('save')}
+      </button>
+    </form>
+  );
+}
+
 export function ExportButtons() {
   const { t } = useLocale();
   return (

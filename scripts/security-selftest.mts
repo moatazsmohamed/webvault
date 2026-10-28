@@ -16,11 +16,16 @@ process.env.SUPABASE_URL ??= 'https://selftest.invalid.supabase.co';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'selftest-service-role-key';
 process.env.WEBVAULT_ENC_KEY ??= randomBytes(32).toString('base64');
 process.env.WEBVAULT_SESSION_SECRET ??= randomBytes(32).toString('hex');
+// Recovery is asserted in its unconfigured state, so a developer's real Resend
+// keys in the shell must not leak into the run. `env.ts` reads these at import.
+for (const name of ['RESEND_API_KEY', 'RESEND_FROM', 'WEBVAULT_MAIL_OUTBOX']) delete process.env[name];
 
-const { encrypt, decrypt, blindIndex, hint, makePasswordVerifier, verifyPassword, signToken, readToken, VaultError } =
+const { encrypt, decrypt, blindIndex, hint, makePasswordVerifier, verifyPassword, signToken, readToken, randomRecoveryCode, hashCode, tokenIssuedAt, VaultError } =
   await import('../src/lib/crypto.ts');
-const { parse, httpUrl, roomCreate, websiteCreate, credentialCreate, setupInput, passwordChangeInput, urlsInput } =
+const { parse, httpUrl, roomCreate, websiteCreate, credentialCreate, setupInput, passwordChangeInput, urlsInput, recoveryEmailInput, passwordResetInput } =
   await import('../src/lib/validation.ts');
+const { env } = await import('../src/lib/env.ts');
+const { mailEnabled, maskEmail, RECOVERY_TTL_SECONDS, RECOVERY_MAX_ATTEMPTS } = await import('../src/lib/mail.ts');
 const { translate, DICT, activityLabel } = await import('../src/lib/i18n.ts');
 const { hostOf, formatDate } = await import('../src/lib/format.ts');
 const { STATUSES, URL_KINDS, ACCOUNT_TYPES } = await import('../src/lib/types.ts');
@@ -265,6 +270,68 @@ test('hostname rendering strips any credentials from a URL', () => {
   assert.equal(hostOf(''), '');
   assert.equal(hostOf(null), '');
   assert.equal(formatDate(null, 'ar'), '—');
+});
+
+// ─── password recovery ───────────────────────────────────────────────────────
+
+test('recovery codes are six digits and never repeat in practice', () => {
+  const seen = new Set<string>();
+  for (let i = 0; i < 400; i++) {
+    const code = randomRecoveryCode();
+    assert.match(code, /^\d{6}$/, `${code} is not six digits`);
+    seen.add(code);
+  }
+  assert.ok(seen.size > 380, 'codes are not random enough to be unguessable');
+});
+
+test('a stored recovery code is an HMAC, and another account cannot reuse it', () => {
+  const hash = hashCode('user-a', '123456');
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.ok(!hash.includes('123456'));
+  assert.equal(hash, hashCode('user-a', ' 123456 '), 'surrounding space must not change the answer');
+  assert.notEqual(hash, hashCode('user-b', '123456'), 'the code must be bound to its account');
+  assert.notEqual(hash, hashCode('user-a', '123457'));
+});
+
+test('session-revocation check reads iat and refuses to guess', () => {
+  const jwt = (payload: unknown) => `header.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.sig`;
+  assert.equal(tokenIssuedAt(jwt({ iat: 1_700_000_000 })), 1_700_000_000);
+  assert.equal(tokenIssuedAt(jwt({ sub: 'no-iat' })), null);
+  assert.equal(tokenIssuedAt(jwt({ iat: 'now' })), null, 'a non-numeric iat must not be trusted');
+  for (const bad of ['', 'abc', 'a.b', undefined, null]) assert.equal(tokenIssuedAt(bad as string), null);
+});
+
+test('recovery email input accepts an inbox, accepts clearing, rejects junk', () => {
+  const ok = parse(recoveryEmailInput, { email: '  Moataz@Gmail.COM ', password: 'x'.repeat(12) });
+  assert.equal(ok.ok, true);
+  if (ok.ok) assert.equal(ok.value.email, 'moataz@gmail.com', 'addresses are stored lowercase');
+  assert.equal(parse(recoveryEmailInput, { email: '', password: 'x'.repeat(12) }).ok, true, 'clearing the address must be allowed');
+  for (const bad of ['moataz', 'moataz@', '@gmail.com', 'a b@c.de', 'moataz@gmail', 'moataz@gmail.c']) {
+    assert.equal(parse(recoveryEmailInput, { email: bad, password: 'x'.repeat(12) }).ok, false, `accepted ${JSON.stringify(bad)}`);
+  }
+  assert.equal(parse(recoveryEmailInput, { email: 'm@g.com', password: '' }).ok, false, 'changing it needs the current password');
+});
+
+test('the reset endpoint only accepts a six-digit code and a strong new password', () => {
+  assert.equal(parse(passwordResetInput, { username: 'moataz', code: '042317', password: 'x'.repeat(12) }).ok, true);
+  assert.equal(parse(passwordResetInput, { username: 'moataz', code: '42317', password: 'x'.repeat(12) }).ok, false);
+  assert.equal(parse(passwordResetInput, { username: 'moataz', code: 'abcd12', password: 'x'.repeat(12) }).ok, false);
+  assert.equal(parse(passwordResetInput, { username: 'moataz', code: '123456', password: 'short' }).ok, false);
+});
+
+test('recovery email stays off until a transport is configured', () => {
+  assert.equal(env.mailReady, false, 'selftest must never hold real Resend keys');
+  assert.equal(mailEnabled(), false, 'without a transport or an outbox nothing can be sent');
+  assert.equal(RECOVERY_TTL_SECONDS, 600);
+  assert.equal(RECOVERY_MAX_ATTEMPTS, 5);
+});
+
+test('the settings screen never renders a full recovery address', () => {
+  const masked = maskEmail('moatazsmohamed@gmail.com');
+  assert.ok(masked.endsWith('@gmail.com'), masked);
+  assert.ok(!masked.includes('atazsmoham'), 'the local part must be masked');
+  assert.equal(maskEmail('ab@gmail.com'), '••••@gmail.com', 'a two-letter inbox stays fully hidden');
+  assert.equal(maskEmail('garbage'), '•••', 'a value with no domain renders as nothing useful');
 });
 
 // ─── runner ──────────────────────────────────────────────────────────────────

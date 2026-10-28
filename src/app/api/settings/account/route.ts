@@ -4,7 +4,7 @@ import { assertEnv } from '@/lib/env';
 import { audit, clientIp, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
 import { makePasswordVerifier, verifyPassword } from '@/lib/crypto';
 import { UNLOCK_COOKIE } from '@/lib/auth';
-import { parse, passwordChangeInput, usernameChangeInput } from '@/lib/validation';
+import { parse, passwordChangeInput, recoveryEmailInput, usernameChangeInput } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,6 +47,32 @@ export async function POST(req: Request) {
     (await cookies()).delete(UNLOCK_COOKIE);
     await audit(profile.id, 'password.change', { entityType: 'profile', entityId: profile.id, ip });
     return json({ ok: true });
+  }
+
+  if (body.action === 'recovery_email') {
+    const parsed = parse(recoveryEmailInput, body);
+    if (!parsed.ok) return fail(ERRORS.VALIDATION, 'Check the email address and password.', 400, { issues: parsed.issues });
+    if (!verifyPassword(parsed.value.password, profile.reveal_salt, profile.reveal_hash)) {
+      await audit(profile.id, 'recovery_email_denied', { entityType: 'profile', entityId: profile.id, ip });
+      return fail(ERRORS.UNAUTHENTICATED, 'Password is incorrect.', 401);
+    }
+
+    // The sign-in identity is a fake address, so saving it as the recovery target
+    // would make reset requests silently go nowhere.
+    if (parsed.value.email.endsWith('@vault.webvault.app')) {
+      return fail(ERRORS.VALIDATION, 'Use a real inbox you can open.', 400);
+    }
+
+    const { error } = await db.from('profiles').update({ recovery_email: parsed.value.email }).eq('id', profile.id);
+    if (error) return fail(ERRORS.SERVER, error.message, 500);
+
+    await audit(profile.id, 'recovery.change', {
+      entityType: 'profile',
+      entityId: profile.id,
+      detail: { configured: parsed.value.email !== '' },
+      ip,
+    });
+    return json({ ok: true, configured: parsed.value.email !== '' });
   }
 
   if (body.action === 'username') {

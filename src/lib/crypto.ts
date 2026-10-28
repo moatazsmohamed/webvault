@@ -125,3 +125,32 @@ export function readToken(token: string | undefined | null): UnlockPayload | nul
 export function randomToken(bytes = 24): string {
   return crypto.randomBytes(bytes).toString('base64url');
 }
+
+// ─── one-time recovery codes ────────────────────────────────────────────────
+
+/** Six digits — short enough to type from an email on a phone, long enough for a 10-minute TTL and 5 tries. */
+export function randomRecoveryCode(): string {
+  return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+}
+
+/** Only the HMAC is ever stored, so a database dump cannot be replayed as a code. */
+export function hashCode(userId: string, code: string): string {
+  return crypto.createHmac('sha256', env.sessionSecret).update(`${userId}.${code.trim()}`).digest('hex');
+}
+
+/**
+ * `iat` from a GoTrue access token, used to refuse sessions minted before a
+ * password reset. Decoding without verifying is safe here: `currentProfile()`
+ * has already asked GoTrue to validate the same token, and a forged cookie would
+ * fail that check before this value is ever compared.
+ */
+export function tokenIssuedAt(accessToken: string | null | undefined): number | null {
+  const payload = accessToken?.split('.')[1];
+  if (!payload) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { iat?: unknown };
+    return typeof claims.iat === 'number' ? claims.iat : null;
+  } catch {
+    return null;
+  }
+}

@@ -21,3 +21,6 @@ next-env.d.ts
 
 # ===== supabase cli scratch state =====
 supabase/.temp/
+
+# recovery codes land in this file during e2e runs — never commit it
+.mail-outbox.jsonl

@@ -9,6 +9,10 @@
  * to see them):
  *   WEBVAULT_E2E_BASE      default http://localhost:3000
  *   WEBVAULT_E2E_KEEP      "1" to leave the two test accounts behind
+ *   WEBVAULT_MAIL_OUTBOX   required for the recovery tests (10f–10k): the app is
+ *                          run in development and appends each message it would
+ *                          send here, so the suite can read a code back. It must
+ *                          point at a path on the machine running the app.
  *   --fresh                delete the leftover e2e accounts first, so the run
  *                          starts from a true first-run database
  *
@@ -25,7 +29,8 @@ import { join } from 'node:path';
 const envFile = join(import.meta.dirname!, '..', '.env.local');
 if (existsSync(envFile)) {
   for (const line of readFileSync(envFile, 'utf8').split(/\r?\n/)) {
-    const m = /^([A-Z_]+)=(.+)$/.exec(line.trim());
+    // digits are legal in these names (WEBVAULT_E2E_SETUP_KEY), so do not filter them out
+    const m = /^([A-Z][A-Z0-9_]*)=(.+)$/.exec(line.trim());
     if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!;
   }
 }
@@ -133,7 +138,9 @@ async function bootstrap() {
   if (probe.status === 401) throw new Error(`server refused the probe (${probe.status}) — is the app running and env filled?`);
   const existing = await post(`/api/auth/login`, { username: ACCOUNT.keeper, password: PW_MAIN });
   if (existing.status === 200) return;
-  assert.equal(probe.json?.firstRun, true, 'not first run and the e2e account does not exist — rerun with --fresh');
+  // Two ways in: a genuinely empty database, or WEBVAULT_INVITE_KEY set to the same
+  // value as the setup key — which is how the suite runs against a project that
+  // already holds the owner's account.
   const setup = await hit('/api/auth/login', {
     method: 'PUT',
     body: JSON.stringify({
@@ -569,8 +576,122 @@ await test('10e. exports carry metadata only — no password, username or cipher
   assert.ok(!csvExport.has('e2e-admin-user'), 'the CSV export contains a stored username');
 });
 
+// ─── 10f–10j: password recovery ──────────────────────────────────────────────
+// These need the app running in development with WEBVAULT_MAIL_OUTBOX set in
+// .env.local, because the code is only ever readable from the delivered message.
+const OUTBOX = process.env.WEBVAULT_MAIL_OUTBOX ?? '';
+const RECOVERY_EMAIL = 'e2e-recovery@example.test';
+const PW_RECOVERED = 'e2e-vault-recovered-2026-Sx!k';
+
+function lastCodeFor(email: string): string | null {
+  if (!OUTBOX || !existsSync(OUTBOX)) return null;
+  const lines = readFileSync(OUTBOX, 'utf8').split(/\r?\n/).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const entry = JSON.parse(lines[i]!) as { to?: string; code?: string };
+      if (entry.to === email && entry.code) return entry.code;
+    } catch {
+      /* a torn line is not a delivery */
+    }
+  }
+  return null;
+}
+
+function requireOutbox(): void {
+  if (!OUTBOX) throw new Error('the recovery tests need WEBVAULT_MAIL_OUTBOX set in .env.local (and the app restarted)');
+}
+
+await test('10f. the recovery address needs the current password and a real inbox', async () => {
+  await loginAs(ACCOUNT.keeper, PW_ROTATED);
+  const noPw = await post('/api/settings/account', { action: 'recovery_email', email: RECOVERY_EMAIL, password: 'wrong' });
+  assert.equal(noPw.status, 401, noPw.body.slice(0, 160));
+  const junk = await post('/api/settings/account', { action: 'recovery_email', email: 'not-an-email', password: PW_ROTATED });
+  assert.equal(junk.status, 400, junk.body.slice(0, 160));
+  const fake = await post('/api/settings/account', { action: 'recovery_email', email: `${ACCOUNT.keeper}@vault.webvault.app`, password: PW_ROTATED });
+  assert.equal(fake.status, 400, 'the sign-in identity must not be savable as a recovery inbox');
+  const ok = await post('/api/settings/account', { action: 'recovery_email', email: `  ${RECOVERY_EMAIL.toUpperCase()}  `, password: PW_ROTATED });
+  assert.equal(ok.status, 200, ok.body.slice(0, 200));
+  const page = await get('/settings');
+  assert.equal(page.status, 200);
+  assert.ok(!page.has(RECOVERY_EMAIL), 'the settings page rendered the full recovery address');
+});
+
+await test('10g. requesting a code answers the same whether or not the account exists', async () => {
+  requireOutbox();
+  await clearThrottle();
+  const real = await post('/api/auth/forgot', { username: ACCOUNT.keeper });
+  assert.equal(real.status, 200, real.body.slice(0, 200));
+  assert.equal(real.body, '{"ok":true}', `the response body is not the uniform answer: ${real.body}`);
+  const ghost = await post('/api/auth/forgot', { username: 'no_such_e2e_user' });
+  assert.equal(ghost.status, 200);
+  assert.equal(ghost.body, real.body, 'an unknown username got a different answer');
+  assert.ok(!real.has('code') && !/"code"/.test(real.body), 'the code came back through the API');
+  const code = lastCodeFor(RECOVERY_EMAIL);
+  assert.ok(code && /^\d{6}$/.test(code), `no six-digit code was delivered to the outbox (got ${String(code)})`);
+});
+
+await test('10h. a wrong code is refused and nothing changes', async () => {
+  const before = await get('/api/websites');
+  assert.equal(before.status, 200);
+  const wrong = await post('/api/auth/reset', { username: ACCOUNT.keeper, code: '000000', password: PW_RECOVERED });
+  assert.equal(wrong.status, 400, wrong.body.slice(0, 200));
+  assert.ok(!wrong.has(PW_RECOVERED), 'the refused attempt echoed the new password');
+  const stillIn = await get('/api/websites');
+  assert.equal(stillIn.status, 200, 'a rejected reset signed the keeper out');
+  await clearThrottle();
+});
+
+await test('10i. the delivered code sets the new password and evicts the old session', async () => {
+  const code = lastCodeFor(RECOVERY_EMAIL) ?? '';
+  assert.ok(code, 'no code to spend');
+  const stolenJar = new Map(cookies);
+  const reset = await post('/api/auth/reset', { username: ACCOUNT.keeper, code, password: PW_RECOVERED });
+  assert.equal(reset.status, 200, reset.body.slice(0, 200));
+
+  const freshJar = new Map(cookies);
+  cookies = stolenJar;
+  const evicted = await get('/api/websites');
+  assert.equal(evicted.status, 401, 'the session minted before the reset still reads the vault');
+  cookies = freshJar;
+  const signedIn = await get('/api/websites');
+  assert.equal(signedIn.status, 200, 'the reset did not leave a working session');
+
+  const unlock = await post('/api/auth/unlock', { password: PW_RECOVERED });
+  assert.equal(unlock.status, 200, unlock.body.slice(0, 160));
+  const reveal = await post(`/api/credentials/${credentialId}/reveal`);
+  assert.equal(reveal.status, 200, reveal.body.slice(0, 200));
+  assert.equal(reveal.json.credential.password, SECRET_SENTINEL, 'recovery broke decryption of stored secrets');
+});
+
+await test('10j. a spent code cannot be replayed', async () => {
+  const code = lastCodeFor(RECOVERY_EMAIL) ?? '';
+  const replay = await post('/api/auth/reset', { username: ACCOUNT.keeper, code, password: PW_RECOVERED });
+  assert.equal(replay.status, 400, `the spent code worked again (${replay.status})`);
+  await clearThrottle();
+  const oldPw = await post('/api/auth/login', { username: ACCOUNT.keeper, password: PW_ROTATED });
+  assert.ok(oldPw.status === 401 || oldPw.status === 429, `the pre-recovery password still works (${oldPw.status})`);
+});
+
+await test('10k. recovery back to the suite password, and an empty address closes the flow', async () => {
+  await loginAs(ACCOUNT.keeper, PW_RECOVERED);
+  const restore = await post('/api/settings/account', { action: 'password', current_password: PW_RECOVERED, new_password: PW_ROTATED });
+  assert.equal(restore.status, 200, restore.body.slice(0, 200));
+  // Supabase kills the session that just changed its password (see 10b), so the
+  // next call needs a fresh jar — otherwise the assertion below reads a 401.
+  await loginAs(ACCOUNT.keeper, PW_ROTATED);
+  const clear = await post('/api/settings/account', { action: 'recovery_email', email: '', password: PW_ROTATED });
+  assert.equal(clear.status, 200, clear.body.slice(0, 200));
+  await clearThrottle();
+  const blind = await post('/api/auth/forgot', { username: ACCOUNT.keeper });
+  assert.equal(blind.status, 200, 'clearing the address turned it into an error the username can be probed with');
+  assert.equal(blind.body, '{"ok":true}', `the no-address branch answered differently: ${blind.body}`);
+  assert.equal(lastCodeFor(RECOVERY_EMAIL) === null, false, 'the outbox history disappeared — the assertion above proves nothing');
+});
+
 // 1 — lockout on the bad-password path, run LAST so the 15-minute lock cannot
 // interfere with the authenticated tests above.
+
+
 await test('1f. five bad passwords lock further attempts out', async () => {
   const saved = cookies;
   cookies = new Map();

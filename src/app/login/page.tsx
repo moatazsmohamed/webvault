@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { AuthForm, AuthShell, AuthTitle } from '@/components/auth-form';
 import { currentProfile, LOCALE_COOKIE } from '@/lib/auth';
 import { isFirstRun } from '@/lib/db';
+import { mailEnabled } from '@/lib/mail';
 import type { Locale } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export default async function LoginPage() {
   return (
     <AuthShell locale={locale} mode={mode}>
       <AuthTitle mode={mode} />
-      <AuthForm mode={mode} />
+      <AuthForm mode={mode} canRecover={mailEnabled()} />
     </AuthShell>
   );
 }

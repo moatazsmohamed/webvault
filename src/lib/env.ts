@@ -37,6 +37,10 @@ const raw = {
   setupKey: process.env.WEBVAULT_SETUP_KEY?.trim() ?? '',
   inviteKey: process.env.WEBVAULT_INVITE_KEY?.trim() ?? '',
   appUrl: process.env.NEXT_PUBLIC_APP_URL?.trim() || '',
+  resendKey: process.env.RESEND_API_KEY?.trim() ?? '',
+  resendFrom: process.env.RESEND_FROM?.trim() ?? '',
+  // Dev/test only: append the outbound message to this file instead of sending it.
+  mailOutbox: process.env.WEBVAULT_MAIL_OUTBOX?.trim() ?? '',
 };
 
 if (raw.sessionSecret && !/^[0-9a-f]{48,}$/i.test(raw.sessionSecret)) {
@@ -51,12 +55,19 @@ export const env = {
   setupKey: raw.setupKey,
   inviteKey: raw.inviteKey,
   appUrl: raw.appUrl,
+  resendKey: raw.resendKey,
+  resendFrom: raw.resendFrom,
+  mailOutbox: raw.mailOutbox,
   isProd: process.env.NODE_ENV === 'production',
   get ready(): boolean {
     return MISSING.length === 0;
   },
   get missing(): readonly string[] {
     return MISSING;
+  },
+  /** Recovery email works when Resend is configured; the outbox is a non-production escape hatch. */
+  get mailReady(): boolean {
+    return !!(raw.resendKey && raw.resendFrom);
   },
 };
 

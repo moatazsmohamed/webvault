@@ -1,12 +1,13 @@
 import { Callout, PageHead, Panel } from '@/components/bits';
 import { Icon } from '@/components/icons';
-import { ExportButtons, PasswordChangeForm, ProfileForm, SecurityNotes, UsernameChangeForm } from '@/components/settings-panels';
+import { ExportButtons, PasswordChangeForm, ProfileForm, RecoveryEmailForm, SecurityNotes, UsernameChangeForm } from '@/components/settings-panels';
 import { LockButton, UnlockButton } from '@/components/vault';
 import { EmptyState } from '@/components/ui';
 import { activityFeed, dashboardStats } from '@/lib/db';
 import { isVaultUnlocked, requireProfile, uiPrefs } from '@/lib/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
 import { activityLabel, translate, type DictKey } from '@/lib/i18n';
+import { mailEnabled, maskEmail } from '@/lib/mail';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +42,19 @@ export default async function SettingsPage() {
               <h3 className="label">{t('change_username')}</h3>
               <UsernameChangeForm username={profile.username} />
             </div>
+          </div>
+        </Panel>
+
+        <Panel title={t('recovery_panel')} icon="mail">
+          <div className="flex flex-col gap-5">
+            <RecoveryEmailForm masked={maskEmail(profile.recovery_email)} configured={!!profile.recovery_email} />
+            {!mailEnabled() ? (
+              <div className="border-t pt-4">
+                <Callout icon="alert">
+                  <p className="text-xs">{t('recovery_transport_off')}</p>
+                </Callout>
+              </div>
+            ) : null}
           </div>
         </Panel>
 

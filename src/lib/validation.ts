@@ -123,6 +123,27 @@ export const profileSettingsInput = z.object({
 
 export const unlockInput = z.object({ password: z.string().min(1).max(512) });
 
+/** The shape matches the database CHECK on profiles.recovery_email; '' clears the address. */
+export const recoveryEmailInput = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254)
+    .refine(v => v === '' || /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v), 'Use a full address like name@example.com'),
+  password: z.string().min(1).max(512),
+});
+
+export const forgotRequestInput = z.object({
+  username: z.string().trim().min(1).max(80),
+});
+
+export const passwordResetInput = z.object({
+  username: z.string().trim().min(1).max(80),
+  code: z.string().trim().regex(/^\d{6}$/, 'The code is 6 digits'),
+  password: z.string().min(12, 'Use at least 12 characters').max(512),
+});
+
 export const searchInput = z.object({
   q: z.string().trim().max(200).default(''),
   room: z.string().trim().max(64).optional(),

@@ -31,6 +31,31 @@ export const DICT = {
   sign_out_done: { ar: 'تم تسجيل الخروج', en: 'Signed out' },
   note_hashed: { ar: 'كلمة المرور بتتحقق بـ scrypt من على السيرفر — مفيش حاجة حساسة في المتصفح', en: 'Passwords are verified server-side with scrypt — nothing sensitive lives in the browser' },
 
+  // password recovery
+  forgot_password: { ar: 'نسيت كلمة المرور؟', en: 'Forgot your password?' },
+  reset_title: { ar: 'استعادة كلمة المرور', en: 'Password recovery' },
+  reset_subtitle: { ar: 'هنبعت كود على بريد الاستعادة بتاعك، وبعدها تعيّن كلمة مرور جديدة.', en: 'We send a one-time code to your recovery address, then you set a new password.' },
+  reset_step1_hint: { ar: 'الكود هيوصل للبريد اللي ضبطته في الإعدادات. الاستعادة محتاجة اسم المستخدم بتاعك كمان.', en: 'The code goes to the address saved in Settings. Recovery needs your username too.' },
+  reset_step2_hint: { ar: 'أدخل الكود اللي وصل على بريد حساب «{username}». صالح 10 دقايق ويستخدام مرة واحدة.', en: 'Enter the code sent for “{username}”. It lasts 10 minutes and works once.' },
+  send_code: { ar: 'إرسال الكود', en: 'Send code' },
+  resend_code: { ar: 'إرسال كود تاني', en: 'Send a new code' },
+  resend_in: { ar: 'استنى {s} ثانية', en: 'Wait {s} seconds' },
+  code: { ar: 'كود التحقق', en: 'Verification code' },
+  code_hint: { ar: '6 أرقام', en: '6 digits' },
+  confirm_password: { ar: 'تأكيد كلمة المرور', en: 'Confirm password' },
+  set_new_password: { ar: 'تعيين كلمة المرور الجديدة', en: 'Set new password' },
+  back_to_login: { ar: 'رجوع لتسجيل الدخول', en: 'Back to sign in' },
+  err_bad_code: { ar: 'الكود غير صحيح أو انتهى وقته.', en: 'That code is not valid, or it has expired.' },
+  err_password_match: { ar: 'الاثنين لازم يكونوا زي بعض.', en: 'The two passwords must match.' },
+  err_mail_disabled: { ar: 'الاستعادة بالبريد مش متفعّلة على النشر ده.', en: 'Email recovery is not configured on this deployment.' },
+  recovery_panel: { ar: 'استعادة كلمة المرور', en: 'Password recovery' },
+  recovery_email: { ar: 'بريد الاستعادة', en: 'Recovery email' },
+  recovery_email_hint: { ar: 'أي صندوق تقدر تفتحه — الكود بيوصل هناك بس', en: 'Any inbox you can open — the code is only ever sent there' },
+  recovery_current: { ar: 'البريد الحالي', en: 'Current address' },
+  recovery_none: { ar: 'لسه مفيش بريد استعادة مضبوط.', en: 'No recovery address is set yet.' },
+  recovery_warning: { ar: 'من غيره، لو نسيت كلمة المرور هتفقد الدخول نهائيًا — مفيش طريقة تانية للاستعادة.', en: 'Without it a forgotten password means permanent lockout — there is no other way back in.' },
+  recovery_transport_off: { ar: 'إرسال البريد مقفول على النشر ده: ضيف RESEND_API_KEY و RESEND_FROM في فيرسال ثم أعد النشر.', en: 'Outbound email is off on this deployment: add RESEND_API_KEY and RESEND_FROM in Vercel, then redeploy.' },
+
   // errors
   err_bad_credentials: { ar: 'اسم المستخدم أو كلمة المرور غير صحيحة.', en: 'Incorrect username or password.' },
   err_locked: { ar: 'محاولات كتير — الحساب مقفل مؤقتًا.', en: 'Too many attempts — temporarily locked.' },
@@ -245,6 +270,12 @@ export const DICT = {
   act_username_change: { ar: 'تغيير اسم المستخدم', en: 'Username changed' },
   act_password_change_denied: { ar: 'محاولة تغيير كلمة مرور فاشلة', en: 'Password change rejected' },
   act_data_export: { ar: 'تصدير البيانات', en: 'Data exported' },
+  act_password_reset_request: { ar: 'طلب كود استعادة', en: 'Recovery code requested' },
+  act_password_reset_denied: { ar: 'محاولة استعادة فاشلة', en: 'Failed recovery attempt' },
+  act_password_reset_failed: { ar: 'استعادة كلمة المرور تعطلت', en: 'Recovery did not complete' },
+  act_password_reset: { ar: 'تعيين كلمة مرور بالاستعادة', en: 'Password reset by email code' },
+  act_recovery_change: { ar: 'ضبط بريد الاستعادة', en: 'Recovery email updated' },
+  act_recovery_email_denied: { ar: 'محاولة تغيير بريد الاستعادة مرفوضة', en: 'Recovery email change rejected' },
 } satisfies Record<string, Entry>;
 
 export type DictKey = keyof typeof DICT;

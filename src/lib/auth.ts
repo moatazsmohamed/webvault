@@ -2,7 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { admin, sessionClient } from './supabase/server';
-import { readToken, signToken } from './crypto';
+import { readToken, signToken, tokenIssuedAt } from './crypto';
 
 export const UNLOCK_COOKIE = 'wv_unlock';
 export const UNLOCK_SECONDS = 5 * 60;
@@ -17,6 +17,8 @@ export type Profile = {
   theme: 'dark' | 'light';
   reveal_salt: string;
   reveal_hash: string;
+  recovery_email: string;
+  sessions_revoked_at: string | null;
   created_at: string;
 };
 
@@ -28,11 +30,20 @@ export async function currentProfile(): Promise<Profile | null> {
 
   const { data: profile, error: pErr } = await admin()
     .from('profiles')
-    .select('id,username,display_name,locale,theme,reveal_salt,reveal_hash,created_at')
+    .select('id,username,display_name,locale,theme,reveal_salt,reveal_hash,recovery_email,sessions_revoked_at,created_at')
     .eq('id', data.user.id)
     .maybeSingle();
 
   if (pErr || !profile) return null;
+
+  // A password reset revokes every session minted before it, so whoever knew the
+  // old password is signed out of their other browsers and not just this one.
+  if (profile.sessions_revoked_at) {
+    const { data: live } = await supabase.auth.getSession();
+    const issuedAt = tokenIssuedAt(live.session?.access_token);
+    if (issuedAt !== null && issuedAt * 1000 < Date.parse(profile.sessions_revoked_at)) return null;
+  }
+
   return profile as Profile;
 }
 
