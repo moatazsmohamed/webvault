@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Callout, PageHead, Panel } from '@/components/bits';
 import { Icon } from '@/components/icons';
-import { OpenLink, StatusPicker, URL_ORDER } from '@/components/website-card';
+import { OpenLink, StatusPicker } from '@/components/website-card';
 import { WebsiteDeleteButton, WebsiteEditButton } from '@/components/website-form';
 import { CredentialAddButton, CredentialRow, LockButton, UnlockButton } from '@/components/vault';
 import { EmptyState } from '@/components/ui';
@@ -10,7 +10,7 @@ import { isVaultUnlocked, requireProfile, uiPrefs } from '@/lib/auth';
 import { getWebsite, listRooms, allCategories } from '@/lib/db';
 import { formatDateTime, hostOf } from '@/lib/format';
 import { translate, type DictKey } from '@/lib/i18n';
-import type { UrlKind } from '@/lib/types';
+import { URL_KINDS, type UrlKind } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +39,7 @@ export default async function WebsitePage({ params }: Ctx) {
     isVaultUnlocked(profile.id),
   ]);
 
-  const missing = !site.description.trim() || !site.category.trim() || URL_ORDER.every(kind => !site.urls[kind]);
+  const missing = !site.description.trim() || !site.category.trim() || URL_KINDS.every(kind => !site.urls[kind]);
 
   return (
     <>
@@ -75,7 +75,7 @@ export default async function WebsitePage({ params }: Ctx) {
         <div className="flex flex-col gap-4">
           <Panel title={t('links')} icon="globe">
             <div className="flex flex-col gap-2.5">
-              {URL_ORDER.map(kind => {
+              {URL_KINDS.map(kind => {
                 const url = site.urls[kind];
                 return (
                   <div key={kind} className="flex flex-col gap-1.5">

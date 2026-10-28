@@ -8,7 +8,7 @@ import { Icon, type IconName } from './icons';
 import { StatusBadge, useLocale, useToast } from './ui';
 import type { DictKey } from '@/lib/i18n';
 import type { UrlKind, WebsiteCard, WebsiteStatus } from '@/lib/types';
-import { STATUSES } from '@/lib/types';
+import { STATUSES, URL_KINDS } from '@/lib/types';
 
 const KIND_META: Record<UrlKind, { icon: IconName; slotKey: DictKey; actionKey: DictKey }> = {
   live: { icon: 'globe', slotKey: 'url_live', actionKey: 'open_site' },
@@ -18,7 +18,7 @@ const KIND_META: Record<UrlKind, { icon: IconName; slotKey: DictKey; actionKey: 
   hosting: { icon: 'server', slotKey: 'url_hosting', actionKey: 'open_hosting' },
 };
 
-export const URL_ORDER: UrlKind[] = ['live', 'admin', 'developer', 'source', 'hosting'];
+export const URL_ORDER = URL_KINDS;
 
 /** Opens in a new tab and records the click so "recently accessed" is real usage. */
 export function OpenLink({
