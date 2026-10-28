@@ -78,21 +78,23 @@ export async function POST(req: Request) {
 }
 
 /**
- * One-time bootstrap. Closes itself the moment a profile exists, and optionally
- * demands WEBVAULT_SETUP_KEY so a stray deploy cannot be claimed by a visitor.
+ * Account bootstrap. Closes itself once a profile exists, and stays open only while
+ * WEBVAULT_INVITE_KEY is set and presented — so the owner can add a second device
+ * or a second account without leaving setup unlocked for strangers.
  */
 export async function PUT(req: Request) {
   assertEnv();
   const crossSite = rejectCrossSite(req);
   if (crossSite) return crossSite;
 
-  if (!(await isFirstRun())) return fail(ERRORS.FORBIDDEN, 'Setup is closed.', 403);
-  if (env.setupKey) {
-    const body0 = await req.clone().json().catch(() => ({}) as Record<string, unknown>);
-    if (String(body0?.setup_key ?? '') !== env.setupKey) {
-      await audit(null, 'setup_denied', { ip: await clientIp(req) });
-      return fail(ERRORS.FORBIDDEN, 'Setup key rejected.', 403);
-    }
+  const body0 = await req.clone().json().catch(() => ({}) as Record<string, unknown>);
+  const presentedKey = String(body0?.setup_key ?? '');
+  const firstRun = await isFirstRun();
+  const invited = !firstRun && !!env.inviteKey && presentedKey === env.inviteKey;
+  if (!firstRun && !invited) return fail(ERRORS.FORBIDDEN, 'Setup is closed.', 403);
+  if (firstRun && env.setupKey && presentedKey !== env.setupKey) {
+    await audit(null, 'setup_denied', { ip: await clientIp(req) });
+    return fail(ERRORS.FORBIDDEN, 'Setup key rejected.', 403);
   }
 
   const parsed = parse(setupInput, await req.json().catch(() => null));

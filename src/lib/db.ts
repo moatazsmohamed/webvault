@@ -172,18 +172,10 @@ export type WebsiteFilter = {
 
 export async function listWebsites(owner: string, filter: WebsiteFilter = {}): Promise<WebsiteCard[]> {
   const db = admin();
-  let query = db.from('websites').select(WEBSITE_SELECT).eq('owner_id', owner);
-  if (filter.roomId) query = query.eq('room_id', filter.roomId);
-  if (!filter.includeArchived && !filter.status) query = query.neq('status', 'archived');
-  if (filter.status) query = query.eq('status', filter.status);
-  if (filter.category) query = query.eq('category', filter.category);
-  if (filter.since) query = query.gte('created_at', filter.since);
 
-  const q = filter.q?.trim();
-  if (q) {
-    const like = `%${q.replace(/[%,()]/g, ' ')}%`;
-    query = query.or(`name.ilike.${like},client_name.ilike.${like},category.ilike.${like},description.ilike.${like}`);
-  }
+  // A tag filter resolves to an id set, and the url/room search below needs the
+  // same set as its starting point, so it is applied to every page built here.
+  let allowedIds: string[] | null = null;
   if (filter.tag) {
     const { data: tagRows } = await db.from('tags').select('id').eq('owner_id', owner).eq('name', filter.tag).limit(5);
     const tagIds = (tagRows ?? []).map(t => t.id);
@@ -191,17 +183,66 @@ export async function listWebsites(owner: string, filter: WebsiteFilter = {}): P
     const { data: links } = await db.from('website_tags').select('website_id').in('tag_id', tagIds).limit(1000);
     const ids = (links ?? []).map(l => l.website_id);
     if (ids.length === 0) return [];
-    query = query.in('id', ids);
+    allowedIds = ids;
   }
 
-  if (filter.sort === 'name') query = query.order('name', { ascending: true });
-  else if (filter.sort === 'accessed') query = query.order('last_accessed_at', { ascending: false, nullsFirst: false });
-  else query = query.order('created_at', { ascending: false });
+  function base() {
+    let query = db.from('websites').select(WEBSITE_SELECT).eq('owner_id', owner);
+    if (filter.roomId) query = query.eq('room_id', filter.roomId);
+    if (!filter.includeArchived && !filter.status) query = query.neq('status', 'archived');
+    if (filter.status) query = query.eq('status', filter.status);
+    if (filter.category) query = query.eq('category', filter.category);
+    if (filter.since) query = query.gte('created_at', filter.since);
+    if (allowedIds) query = query.in('id', allowedIds);
+    return query;
+  }
+  type Page = ReturnType<typeof base>;
 
-  const { data, error } = await query.limit(filter.limit ?? 200);
-  if (error) throw new Error(error.message);
-  return attachDetails(owner, (data ?? []).map(flatten));
+  async function run(select: (query: Page) => Page): Promise<WebsiteRow[]> {
+    let query = select(base());
+    if (filter.sort === 'name') query = query.order('name', { ascending: true });
+    else if (filter.sort === 'accessed') query = query.order('last_accessed_at', { ascending: false, nullsFirst: false });
+    else query = query.order('created_at', { ascending: false });
+    const { data, error } = await query.limit(filter.limit ?? 200);
+    if (error) throw new Error(error.message);
+    return (data ?? []).map(flatten);
+  }
+
+  const q = filter.q?.trim();
+  if (!q) return attachDetails(owner, await run(query => query));
+
+  const like = `%${q.replace(/[%,()]/g, ' ')}%`;
+  const textHits = await run(query =>
+    query.or(`name.ilike.${like},client_name.ilike.${like},category.ilike.${like},description.ilike.${like}`),
+  );
+
+  // URLs and room names live in other tables, so each contributes its own page.
+  const [urlHits, roomHits] = await Promise.all([
+    db.from('website_urls').select('website_id').eq('owner_id', owner).ilike('url', like).limit(200),
+    db.from('rooms').select('id').eq('owner_id', owner).ilike('name', like).limit(50),
+  ]);
+  const siteIds = [...new Set((urlHits.data ?? []).map(u => String(u.website_id)))];
+  const roomIds = [...new Set((roomHits.data ?? []).map(r => String(r.id)))];
+  if (siteIds.length === 0 && roomIds.length === 0) return attachDetails(owner, textHits);
+
+  const linked = await Promise.all([
+    ...(siteIds.length ? [run(query => query.in('id', siteIds))] : []),
+    ...(roomIds.length ? [run(query => query.in('room_id', roomIds))] : []),
+  ]);
+
+  const byId = new Map<string, WebsiteRow>();
+  for (const row of [...textHits, ...linked.flat()]) byId.set(String(row.id), row);
+  const merged = [...byId.values()].sort(compareRows(filter.sort));
+  return attachDetails(owner, merged.slice(0, filter.limit ?? 200));
 }
+
+function compareRows(sort: WebsiteFilter['sort']) {
+  const stamp = (value: unknown) => Date.parse(String(value ?? '')) || 0;
+  if (sort === 'name') return (a: WebsiteRow, b: WebsiteRow) => String(a.name).localeCompare(String(b.name));
+  if (sort === 'accessed') return (a: WebsiteRow, b: WebsiteRow) => stamp(b.last_accessed_at) - stamp(a.last_accessed_at);
+  return (a: WebsiteRow, b: WebsiteRow) => stamp(b.created_at) - stamp(a.created_at);
+}
+
 
 export async function getWebsite(owner: string, id: string): Promise<WebsiteDetail | null> {
   const db = admin();

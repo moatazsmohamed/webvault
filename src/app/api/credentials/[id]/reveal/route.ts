@@ -1,6 +1,6 @@
 import { admin } from '@/lib/supabase/server';
 import { assertEnv } from '@/lib/env';
-import { audit, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
+import { audit, ERRORS, fail, guard, json, rejectCrossSite, requireId } from '@/lib/api';
 import { revealCredential } from '@/lib/db';
 import { VaultError } from '@/lib/crypto';
 
@@ -29,6 +29,8 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!auth.unlocked) return fail(ERRORS.VAULT_LOCKED, 'Unlock the vault first.', 423);
 
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
   const key = `reveal:${auth.profile.id}`;
   const outcome = await admin().rpc('auth_take_attempt', {
     p_key: key,

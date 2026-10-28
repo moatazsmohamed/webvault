@@ -1,5 +1,5 @@
 import { assertEnv } from '@/lib/env';
-import { audit, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
+import { audit, ERRORS, fail, guard, json, rejectCrossSite, requireId } from '@/lib/api';
 import { deleteRoom, getRoom, NotFound, updateRoom } from '@/lib/db';
 import { parse, roomUpdate } from '@/lib/validation';
 
@@ -13,6 +13,8 @@ export async function GET(_req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
   const room = await getRoom(auth.profile.id, id);
   if (!room) return fail(ERRORS.NOT_FOUND, 'Room not found.', 404);
   return json({ room });
@@ -25,6 +27,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   const parsed = parse(roomUpdate, await req.json().catch(() => null));
   if (!parsed.ok) return fail(ERRORS.VALIDATION, 'Check the room details.', 400, { issues: parsed.issues });
@@ -46,6 +50,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   // Deleting a room cascades to every website and credential inside it.
   const confirm = req.headers.get('x-confirm-delete');

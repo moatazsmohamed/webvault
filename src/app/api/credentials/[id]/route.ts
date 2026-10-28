@@ -1,5 +1,5 @@
 import { assertEnv } from '@/lib/env';
-import { audit, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
+import { audit, ERRORS, fail, guard, json, rejectCrossSite, requireId } from '@/lib/api';
 import { deleteCredential, NotFound, updateCredential } from '@/lib/db';
 import { parse, credentialUpdate } from '@/lib/validation';
 
@@ -15,6 +15,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   const parsed = parse(credentialUpdate, await req.json().catch(() => null));
   if (!parsed.ok) return fail(ERRORS.VALIDATION, 'Check the credential details.', 400, { issues: parsed.issues });
@@ -36,6 +38,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   if (req.headers.get('x-confirm-delete') !== 'DELETE') {
     return fail(ERRORS.VALIDATION, 'Type DELETE to confirm this destructive action.', 400);

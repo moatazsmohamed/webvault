@@ -1,5 +1,5 @@
 import { assertEnv } from '@/lib/env';
-import { audit, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
+import { audit, ERRORS, fail, guard, json, rejectCrossSite, requireId } from '@/lib/api';
 import { deleteWebsite, getWebsite, NotFound, updateWebsite } from '@/lib/db';
 import { parse, websiteUpdate } from '@/lib/validation';
 
@@ -17,6 +17,8 @@ export async function GET(_req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
   const website = await getWebsite(auth.profile.id, id);
   if (!website) return fail(ERRORS.NOT_FOUND, 'Website not found.', 404);
   return json({ website, vault_unlocked: auth.unlocked });
@@ -29,6 +31,8 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   const parsed = parse(websiteUpdate, await req.json().catch(() => null));
   if (!parsed.ok) return fail(ERRORS.VALIDATION, 'Check the website details.', 400, { issues: parsed.issues });
@@ -50,6 +54,8 @@ export async function DELETE(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   if (req.headers.get('x-confirm-delete') !== 'DELETE') {
     return fail(ERRORS.VALIDATION, 'Type DELETE to confirm this destructive action.', 400);

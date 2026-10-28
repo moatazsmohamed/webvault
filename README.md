@@ -178,6 +178,7 @@ cp .env.example .env.local
 | `WEBVAULT_ENC_KEY` | yes | base64, decodes to exactly 32 bytes — AES-256 key for the vault |
 | `WEBVAULT_SESSION_SECRET` | yes | ≥48 hex chars — HMAC for the 5-minute unlock cookie |
 | `WEBVAULT_SETUP_KEY` | first run only | extra gate for the `/login` setup screen; clear it once your account exists |
+| `WEBVAULT_INVITE_KEY` | no | reopens account creation after the first run, for a second account or the test runner; leave unset in normal use |
 | `NEXT_PUBLIC_APP_URL` | for prod | your public origin, used in export headers |
 
 ### 4.4 Run and create your account
@@ -186,8 +187,9 @@ npm run dev
 ```
 Open <http://localhost:3000> — with no profile in the DB the login page becomes a **one-time setup form**
 (username, password — minimum 12 characters, display name, language). Submitting it creates the Supabase Auth
-user, writes your `profiles` row, signs you in, and **closes setup forever**. If `WEBVAULT_SETUP_KEY` is set,
-that field is demanded too; unset it afterwards.
+user, writes your `profiles` row and signs you in. Afterwards setup **closes**: a new account needs a matching
+`WEBVAULT_INVITE_KEY` to be accepted, so leaving that variable unset keeps the vault single-account. If
+`WEBVAULT_SETUP_KEY` is set, that field is demanded on the first run too; unset it afterwards.
 
 Logins use a **username**; internally it maps to the non-routable address
 `<username>@vault.webvault.app`, so Supabase's email-based auth never needs a real inbox.
@@ -208,7 +210,7 @@ Logins use a **username**; internally it maps to the non-routable address
 ## 5. Deploy (Vercel)
 
 1. Push the repo to GitHub, **Import** it in Vercel (framework autodetects Next.js; Node 20+).
-2. **Settings → Environment Variables** — add all six from §4.3 (`NEXT_PUBLIC_APP_URL=https://your-domain`).
+2. **Settings → Environment Variables** — add the values from §4.3 (`NEXT_PUBLIC_APP_URL=https://your-domain`).
 3. Deploy. Then in Supabase → **Authentication → URL Configuration**, set **Site URL** to the same origin.
 4. Open the deployment once to run the setup form, and clear `WEBVAULT_SETUP_KEY` right after.
 5. Re-check: `curl -I https://your-domain/dashboard` should show the CSP, HSTS and `X-Frame-Options` headers.
@@ -272,8 +274,10 @@ npm run e2e         # the §7 workflows against a running app + real database
 `npm run e2e` ([scripts/e2e.mts](scripts/e2e.mts)) drives §7 end to end against a live server: it bootstraps its
 own accounts, creates rooms/sites/credentials, then asserts the locked-vault refusal, unlock, reveal, re-lock,
 archive/restore, delete confirmation, every search facet, password + username rotation, and that both export
-formats stay secret-free. It cleans up after itself; the two auth users it creates stay in Supabase Auth (delete
-them from the dashboard, or run with `WEBVAULT_E2E_KEEP=1` first). Point it elsewhere with `WEBVAULT_E2E_BASE`.
+formats stay secret-free. It reads the setup and invite keys from `.env.local`, so `npm run e2e` needs no extra
+configuration. It cleans up after itself; the two auth users it creates stay in Supabase Auth (`--fresh` removes
+them at the start of the next run, `WEBVAULT_E2E_KEEP=1` keeps them for inspection). Point it elsewhere with
+`WEBVAULT_E2E_BASE`.
 
 `npm run selftest` ([scripts/security-selftest.mts](scripts/security-selftest.mts)) runs the parts that must never
 regress silently: the AES-GCM envelope (round-trip, fresh IV per write, tag tamper rejection, unknown key

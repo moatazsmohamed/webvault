@@ -43,6 +43,16 @@ export async function clientIp(req: Request): Promise<string> {
   return req.headers.get('x-real-ip') ?? 'unknown';
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Dynamic route params arrive as raw strings, so `/api/websites/undefined` would
+ * otherwise reach the database and answer 404 as if it were a real record.
+ */
+export function requireId(id: string): NextResponse | null {
+  return UUID.test(id) ? null : fail(ERRORS.VALIDATION, 'Malformed record id.', 400);
+}
+
 /**
  * Same-origin gate for every mutating request. Combined with SameSite=Lax
  * session cookies this is the CSRF defence — the session cookie can never be

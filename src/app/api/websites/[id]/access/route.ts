@@ -1,5 +1,5 @@
 import { assertEnv } from '@/lib/env';
-import { audit, ERRORS, fail, guard, json, rejectCrossSite } from '@/lib/api';
+import { audit, ERRORS, fail, guard, json, rejectCrossSite, requireId } from '@/lib/api';
 import { touchAccess } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -15,6 +15,8 @@ export async function POST(req: Request, { params }: Ctx) {
   const auth = await guard();
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  const badId = requireId(id);
+  if (badId) return badId;
 
   const body = (await req.json().catch(() => ({}))) as { kind?: string };
   const kind = String(body.kind ?? '').slice(0, 20);

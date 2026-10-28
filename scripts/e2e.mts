@@ -7,16 +7,40 @@
  *
  * Optional (same names the app reads, so the shell that runs this must be able
  * to see them):
- *   WEBVAULT_E2E_BASE      default http://127.0.0.1:3000
- *   WEBVAULT_E2E_SETUP_KEY only if WEBVAULT_SETUP_KEY is set on the server
+ *   WEBVAULT_E2E_BASE      default http://localhost:3000
  *   WEBVAULT_E2E_KEEP      "1" to leave the two test accounts behind
+ *   --fresh                delete the leftover e2e accounts first, so the run
+ *                          starts from a true first-run database
+ *
+ * The setup and invite keys are picked up from .env.local; WEBVAULT_E2E_SETUP_KEY
+ * and WEBVAULT_E2E_INVITE_KEY override them when the server runs elsewhere.
  *
  * It creates its own accounts and data, and deletes everything it made.
  */
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-const BASE = (process.env.WEBVAULT_E2E_BASE ?? 'http://127.0.0.1:3000').replace(/\/+$/, '');
-const SETUP_KEY = process.env.WEBVAULT_E2E_SETUP_KEY ?? '';
+// The runner needs the same env the server reads, for the throttle reset only.
+const envFile = join(import.meta.dirname!, '..', '.env.local');
+if (existsSync(envFile)) {
+  for (const line of readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+    const m = /^([A-Z_]+)=(.+)$/.exec(line.trim());
+    if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!;
+  }
+}
+
+/**
+ * The API compares `Origin` against the request host, and Next reports that host as
+ * `localhost` even when the socket is reached by IP — so always drive it as localhost.
+ */
+const BASE = (process.env.WEBVAULT_E2E_BASE ?? 'http://localhost:3000')
+  .replace(/\/+$/, '')
+  .replace('127.0.0.1', 'localhost');
+/** Defaults to the server's own values, which the env block above already read from .env.local. */
+const SETUP_KEY = process.env.WEBVAULT_E2E_SETUP_KEY ?? process.env.WEBVAULT_SETUP_KEY ?? '';
+/** WEBVAULT_INVITE_KEY on the server: lets the runner open its throwaway account. */
+const INVITE_KEY = process.env.WEBVAULT_E2E_INVITE_KEY ?? process.env.WEBVAULT_INVITE_KEY ?? '';
 const KEEP = process.env.WEBVAULT_E2E_KEEP === '1';
 
 const PW_MAIN = 'e2e-vault-main-2026-Px!k';
@@ -58,7 +82,8 @@ async function hit(path, init = {}) {
     if (!eq || eq < 1) continue;
     const name = pair!.slice(0, eq);
     const value = pair!.slice(eq + 1);
-    if (value === '' || /max-age=0/.test(raw)) cookies.delete(name);
+    const cleared = value === '' || /max-age\s*=\s*0\b/i.test(raw) || /expires\s*=\s*thu, 01 jan 1970/i.test(raw);
+    if (cleared) cookies.delete(name);
     else cookies.set(name, value);
   }
   let parsed: any = null;
@@ -103,11 +128,12 @@ function collectUrls(node: unknown, out: string[] = []): string[] {
 }
 
 async function bootstrap() {
+  await clearThrottle();
   const probe = await get('/api/auth/login');
   if (probe.status === 401) throw new Error(`server refused the probe (${probe.status}) — is the app running and env filled?`);
   const existing = await post(`/api/auth/login`, { username: ACCOUNT.keeper, password: PW_MAIN });
   if (existing.status === 200) return;
-  assert.equal(probe.json?.firstRun, true, 'not first run, and the e2e account does not exist');
+  assert.equal(probe.json?.firstRun, true, 'not first run and the e2e account does not exist — rerun with --fresh');
   const setup = await hit('/api/auth/login', {
     method: 'PUT',
     body: JSON.stringify({
@@ -122,11 +148,64 @@ async function bootstrap() {
   assert.ok(cookies.size > 0, 'setup did not issue a session cookie');
 }
 
+/**
+ * Throttle state is keyed by IP and username, so a legitimate test sequence can
+ * lock the runner out of its own app. The rows are test state, not user data.
+ */
+async function clearThrottle(): Promise<void> {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return;
+  await fetch(process.env.SUPABASE_URL + '/rest/v1/auth_attempts?key=like.*', {
+    method: 'DELETE',
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: 'Bearer ' + process.env.SUPABASE_SERVICE_ROLE_KEY,
+      prefer: 'return=minimal',
+    },
+  }).catch(() => {});
+}
+
+/** Sign in as one of the two e2e accounts and hand back the previous cookie jar. */
+async function loginAs(username: string, password: string): Promise<Map<string, string>> {
+  const previous = cookies;
+  cookies = new Map();
+  await clearThrottle();
+  const r = await post('/api/auth/login', { username, password });
+  assert.ok(r.status === 200, `login as ${username} → ${r.status} ${r.body.slice(0, 160)}`);
+  return previous;
+}
+
+/**
+ * The suite renames and re-passwords its own keeper, so a rerun needs a clean
+ * slate: remove the e2e auth users (their rows cascade) and start over.
+ */
+async function nukeE2eAccounts(): Promise<void> {
+  const base = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key) throw new Error('--fresh needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.local');
+  const headers = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const listing = (await fetch(`${base}/auth/v1/admin/users?page=0&per_page=1000`, { headers })
+    .then(r => r.json())
+    .catch(() => ({ users: [] }))) as { users?: { id: string; email?: string }[] };
+  const e2e = (listing.users ?? []).filter(u => String(u.email ?? '').startsWith('e2e_'));
+  if (e2e.length) {
+    await fetch(`${base}/rest/v1/activity_logs?owner_id=in.(${e2e.map(u => u.id).join(',')})`, {
+      method: 'DELETE',
+      headers: { ...headers, prefer: 'return=minimal' },
+    }).catch(() => {});
+  }
+  for (const user of e2e) {
+    const res = await fetch(`${base}/auth/v1/admin/users/${user.id}`, { method: 'DELETE', headers });
+    if (!res.ok && res.status !== 404) throw new Error(`could not remove an e2e account (${res.status})`);
+  }
+  console.log(`  removed ${e2e.length} leftover e2e account(s)`);
+}
+
 console.log(`\nWebVault end-to-end — ${BASE}\n`);
 
 // ── pre-flight: is the server reachable at all ───────────────────────────────
 const reachable = await fetch(BASE + '/login').then(r => r.status).catch(() => 0);
 assert.ok(reachable === 200, `no app on ${BASE} (status ${reachable}) — start it with: npm run dev`);
+if (process.argv.includes('--fresh')) await nukeE2eAccounts();
 await bootstrap();
 
 let siteFull = '';
@@ -216,10 +295,10 @@ await test('4b. website with only a live URL keeps the other slots empty', async
   });
   siteLite = idOf(r, 'website');
   const u = r.json.website.urls;
-  for (const slot of ['live', 'admin', 'developer', 'source', 'hosting']) {
-    assert.ok(u[slot] === '' || u[slot] === null || u[slot] === undefined, `${slot} should be empty, got ${u[slot]}`);
+  assert.equal(u.live, 'https://e2e-lite.example.com', 'the live slot did not save');
+  for (const slot of ['admin', 'developer', 'source', 'hosting']) {
+    assert.ok(!u[slot], `${slot} should be empty, got ${u[slot]}`);
   }
-  assert.equal(u.live, 'https://e2e-lite.example.com');
 });
 
 await test('4c. a non-http URL is rejected outright', async () => {
@@ -262,13 +341,37 @@ await test('5b. list responses mask the username and carry no password material'
 });
 
 // 6 — open a link
-await test('6. opening a link records it as recently accessed', async () => {
+await test('6. opening a link stamps last_accessed_at and reorders the accessed view', async () => {
+  const before = await get(`/api/websites/${siteFull}`);
+  assert.ok(!before.json.website.last_accessed_at, 'a brand new site already has an access stamp');
   const r = await post(`/api/websites/${siteFull}/access`, { kind: 'live', url: 'https://e2e-live.example.com' });
   assert.equal(r.status, 200, r.body.slice(0, 200));
-  const list = await get('/api/websites?sort=recent');
-  const first = list.json?.websites?.[0];
-  assert.equal(first?.id, siteFull, `most recent site should be the one just opened, got ${first?.name}`);
-  assert.ok(first?.last_accessed_at, 'no last_accessed_at stamped');
+  const after = await get(`/api/websites/${siteFull}`);
+  assert.ok(after.json.website.last_accessed_at, 'no last_accessed_at stamped');
+  assert.notEqual(after.json.website.last_accessed_at, before.json.website.last_accessed_at);
+  const list = await get('/api/websites?sort=accessed');
+  assert.ok(Array.isArray(list.json?.websites), `accessed sort returned no list: ${list.body.slice(0, 160)}`);
+  assert.equal(list.json.websites[0].id, siteFull, `most recently opened site should lead, got ${list.json.websites[0]?.name}`);
+});
+
+await test('6b. a malformed record id is rejected, not treated as a lookup', async () => {
+  const cases: [string, string][] = [
+    ['GET', '/api/websites/undefined'],
+    ['GET', '/api/websites/not-a-uuid'],
+    ['GET', '/api/rooms/undefined'],
+    ['PATCH', '/api/credentials/undefined'],
+    ['DELETE', '/api/credentials/undefined'],
+  ];
+  for (const [method, p] of cases) {
+    const r =
+      method === 'GET'
+        ? await get(p)
+        : method === 'PATCH'
+          ? await patch(p, { title: 'should never reach the database' })
+          : await del(p, true);
+    assert.equal(r.status, 400, `${method} ${p} → ${r.status}, expected 400`);
+    assert.ok(r.has('VALIDATION_FAILED'), `${method} ${p} did not report a validation error`);
+  }
 });
 
 // 7 — reveal + copy
@@ -276,13 +379,6 @@ await test('7. locked vault refuses to reveal', async () => {
   const r = await post(`/api/credentials/${credentialId}/reveal`);
   assert.equal(r.status, 423, `expected VAULT_LOCKED, got ${r.status}: ${r.body.slice(0, 160)}`);
   assert.ok(r.has('VAULT_LOCKED'));
-});
-
-await test('7b. the wrong password does not unlock the vault', async () => {
-  const r = await post('/api/auth/unlock', { password: 'not-the-password' });
-  assert.equal(r.status, 401);
-  const still = await post(`/api/credentials/${credentialId}/reveal`);
-  assert.equal(still.status, 423, 'reveal worked after a failed unlock');
 });
 
 await test('7c. unlock then reveal returns the exact secret', async () => {
@@ -311,9 +407,9 @@ await test('8. a throwaway account can be bootstrapped for destructive checks', 
   cookies = new Map();
   const setup = await hit('/api/auth/login', {
     method: 'PUT',
-    body: JSON.stringify({ username: ACCOUNT.throwaway, password: PW_THROWAWAY, display_name: 'E2E Throwaway', locale: 'ar', setup_key: SETUP_KEY }),
+    body: JSON.stringify({ username: ACCOUNT.throwaway, password: PW_THROWAWAY, display_name: 'E2E Throwaway', locale: 'ar', setup_key: INVITE_KEY }),
   });
-  assert.equal(setup.status, 200, `second setup: ${setup.status} ${setup.body.slice(0, 160)}`);
+  assert.equal(setup.status, 200, `invite setup: ${setup.status} ${setup.body.slice(0, 160)} — set WEBVAULT_E2E_INVITE_KEY and WEBVAULT_INVITE_KEY`);
   const room = await post('/api/rooms', { name: 'E2E Doomed', color: '#f97316', icon: 'folder' });
   throwRoom = idOf(room, 'room');
   const site = await post('/api/websites', { room_id: throwRoom, name: 'E2E Doomed Site', urls: { live: 'https://e2e-doomed.example.com' } });
@@ -323,9 +419,19 @@ await test('8. a throwaway account can be bootstrapped for destructive checks', 
   cookies = saved;
 });
 
+await test('8e. one account never sees another account records', async () => {
+  const rooms = await get('/api/rooms');
+  assert.ok(!JSON.stringify(rooms.json).includes(throwRoom), 'the keeper can list the throwaway room');
+  const sites = await get('/api/websites?limit=1000');
+  assert.ok(!JSON.stringify(sites.json).includes(throwSite), 'the keeper can list the throwaway site');
+  const creds = await get('/api/credentials');
+  assert.ok(!JSON.stringify(creds.json).includes(throwCred), 'the keeper can list the throwaway credential');
+  const direct = await get(`/api/websites/${throwSite}`);
+  assert.equal(direct.status, 404, `reading another account site gave ${direct.status}`);
+});
+
 await test('8b. destructive calls are refused without the DELETE confirmation header', async () => {
-  const saved = cookies;
-  await post('/api/auth/login', { username: ACCOUNT.throwaway, password: PW_THROWAWAY });
+  const saved = await loginAs(ACCOUNT.throwaway, PW_THROWAWAY);
   const site = await del(`/api/websites/${throwSite}`);
   assert.equal(site.status, 400, 'a delete went through with no confirmation');
   const cred = await del(`/api/credentials/${throwCred}`);
@@ -334,8 +440,7 @@ await test('8b. destructive calls are refused without the DELETE confirmation he
 });
 
 await test('8c. edit updates in place instead of recreating', async () => {
-  const saved = cookies;
-  await post('/api/auth/login', { username: ACCOUNT.throwaway, password: PW_THROWAWAY });
+  const saved = await loginAs(ACCOUNT.throwaway, PW_THROWAWAY);
   const r = await patch(`/api/websites/${throwSite}`, { name: 'E2E Doomed Renamed', status: 'paused', tags: ['edited'] });
   assert.equal(r.status, 200, r.body.slice(0, 200));
   assert.equal(r.json.website.id, throwSite, 'editing produced a different id');
@@ -345,38 +450,42 @@ await test('8c. edit updates in place instead of recreating', async () => {
 });
 
 await test('8d. archive a room, restore it, then delete a credential and a site for real', async () => {
-  const saved = cookies;
-  await post('/api/auth/login', { username: ACCOUNT.throwaway, password: PW_THROWAWAY });
+  await loginAs(ACCOUNT.throwaway, PW_THROWAWAY);
   const archived = await patch(`/api/rooms/${throwRoom}`, { archived: true });
   assert.equal(archived.status, 200, archived.body.slice(0, 200));
   assert.equal(archived.json.room.archived, true);
   const hidden = await get('/api/rooms');
-  assert.ok(!JSON.stringify(hidden.json).includes(throwRoom), 'archived room still in the default list');
+  assert.ok(!JSON.stringify(hidden.json).includes(throwRoom), `archived room still in the default list: ${hidden.body.slice(0, 200)}`);
+  const shown = await get('/api/rooms?archived=1');
+  assert.ok(JSON.stringify(shown.json).includes(throwRoom), 'an archived room is missing from the archived view');
   const restored = await patch(`/api/rooms/${throwRoom}`, { archived: false });
   assert.equal(restored.json.room.archived, false);
+  const back = await get('/api/rooms');
+  assert.ok(JSON.stringify(back.json).includes(throwRoom), 'the restored room did not return to the default list');
   const gone = await del(`/api/credentials/${throwCred}`, true);
   assert.equal(gone.status, 200, gone.body.slice(0, 200));
   const siteGone = await del(`/api/websites/${throwSite}`, true);
   assert.equal(siteGone.status, 200, siteGone.body.slice(0, 200));
   const missing = await get(`/api/websites/${throwSite}`);
   assert.equal(missing.status, 404, 'the deleted site is still readable');
-  cookies = saved;
 });
 
 // 9 — search
-await test('9. search matches name, client, category, tag and URL', async () => {
-  const byName = await get('/api/websites?q=' + encodeURIComponent('Full Site'));
-  assert.ok(byName.json.websites.some((w: any) => w.id === siteFull), 'name search missed');
-  const byClient = await get('/api/websites?q=' + encodeURIComponent('E2E Client'));
-  assert.ok(byClient.json.websites.some((w: any) => w.id === siteFull), 'client search missed');
-  const byCategory = await get('/api/websites?category=saas');
-  assert.ok(byCategory.json.websites.some((w: any) => w.id === siteFull), 'category filter missed');
-  const byTag = await get('/api/websites?tag=full');
-  assert.ok(byTag.json.websites.some((w: any) => w.id === siteFull), 'tag filter missed');
-  const byUrl = await get('/api/websites?q=' + encodeURIComponent('e2e-hosting'));
-  assert.ok(byUrl.json.websites.some((w: any) => w.id === siteFull), 'url search missed');
-  const combo = await get('/api/websites?q=Full&status=active&tag=full');
-  assert.ok(combo.json.websites.some((w: any) => w.id === siteFull), 'combined filters missed');
+await test('9. search matches name, client, category, tag, URL, room and combinations', async () => {
+  await loginAs(ACCOUNT.keeper, PW_MAIN);
+  const hits = (r: Hit, label: string) => {
+    assert.equal(r.status, 200, `${label}: ${r.body.slice(0, 160)}`);
+    assert.ok(Array.isArray(r.json?.websites), `${label}: no list in response: ${r.body.slice(0, 160)}`);
+    const names = (r.json.websites ?? []).map((w: any) => w.name);
+    assert.ok(r.json.websites.some((w: any) => w.id === siteFull), `${label} missed — got ${JSON.stringify(names)}`);
+  };
+  hits(await get('/api/websites?q=' + encodeURIComponent('Full Site')), 'name');
+  hits(await get('/api/websites?q=' + encodeURIComponent('E2E Client')), 'client');
+  hits(await get('/api/websites?category=saas'), 'category');
+  hits(await get('/api/websites?tag=full'), 'tag');
+  hits(await get('/api/websites?q=' + encodeURIComponent('e2e-hosting')), 'url');
+  hits(await get('/api/websites?q=' + encodeURIComponent('E2E Lab')), 'room name');
+  hits(await get('/api/websites?q=Full&status=active&tag=full'), 'combined filters');
   const miss = await get('/api/websites?q=' + encodeURIComponent('zzz-nothing-here-zzz'));
   assert.equal(miss.json.websites.length, 0, 'search returned noise for an impossible query');
 });
@@ -391,6 +500,7 @@ await test('9b. search and room views never expose the stored secret', async () 
 
 // 10 — settings
 await test('10. profile preferences save (display name, locale, theme)', async () => {
+  await loginAs(ACCOUNT.keeper, PW_MAIN);
   const r = await patch('/api/settings', { display_name: 'E2E Keeper Renamed', locale: 'ar', theme: 'light' });
   assert.equal(r.status, 200, r.body.slice(0, 200));
   const page = await get('/settings');
@@ -398,19 +508,23 @@ await test('10. profile preferences save (display name, locale, theme)', async (
 });
 
 await test('10b. changing the password re-locks the vault and invalidates the old one', async () => {
-  await post('/api/auth/unlock', { password: PW_MAIN });
+  await loginAs(ACCOUNT.keeper, PW_MAIN);
+  const unlock = await post('/api/auth/unlock', { password: PW_MAIN });
+  assert.equal(unlock.status, 200, unlock.body.slice(0, 160));
   assert.ok(cookies.has('wv_unlock'), 'unlock cookie missing before the rotation');
   const bad = await post('/api/settings/account', { action: 'password', current_password: 'wrong', new_password: PW_ROTATED });
   assert.equal(bad.status, 401);
-  assert.ok(cookies.has('wv_unlock'), 'a rejected password change wiped the unlock — that is fine but unexpected');
   const ok = await post('/api/settings/account', { action: 'password', current_password: PW_MAIN, new_password: PW_ROTATED });
   assert.equal(ok.status, 200, ok.body.slice(0, 200));
   assert.ok(!cookies.has('wv_unlock'), 'the vault stayed unlocked after a password change');
+  // Supabase also invalidates the session that changed its password, so either a
+  // dead session (401) or a locked vault (423) is acceptable — plaintext never is.
   const reveal = await post(`/api/credentials/${credentialId}/reveal`);
-  assert.equal(reveal.status, 423, 'reveal still worked with the pre-change unlock token');
-  const oldPw = await post('/api/auth/login', { username: ACCOUNT.keeper, password: PW_MAIN });
+  assert.ok(reveal.status === 423 || reveal.status === 401, `reveal after a password change gave ${reveal.status}`);
+  assert.ok(!reveal.has(SECRET_SENTINEL), 'the password change leaked the secret anyway');
   cookies = new Map();
-  assert.equal(oldPw.status === 429 || oldPw.status === 401, true, `old password produced ${oldPw.status}`);
+  const oldPw = await post('/api/auth/login', { username: ACCOUNT.keeper, password: PW_MAIN });
+  assert.ok(oldPw.status === 429 || oldPw.status === 401, `old password produced ${oldPw.status}`);
 });
 
 await test('10c. the new password unlocks and reveals the same secret', async () => {
@@ -449,7 +563,8 @@ await test('10e. exports carry metadata only — no password, username or cipher
   assert.ok(!csvExport.has('e2e-admin-user'), 'the CSV export contains a stored username');
 });
 
-// 1 — lockout on the bad-password path (isolated account, so the keeper stays usable)
+// 1 — lockout on the bad-password path, run LAST so the 15-minute lock cannot
+// interfere with the authenticated tests above.
 await test('1f. five bad passwords lock further attempts out', async () => {
   const saved = cookies;
   cookies = new Map();

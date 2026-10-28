@@ -6,11 +6,12 @@ import { parse, roomCreate } from '@/lib/validation';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
   assertEnv();
   const auth = await guard();
   if (!auth.ok) return auth.response;
-  return json({ rooms: await listRooms(auth.profile.id, { includeArchived: true }) });
+  const includeArchived = new URL(req.url).searchParams.get('archived') === '1';
+  return json({ rooms: await listRooms(auth.profile.id, { includeArchived }) });
 }
 
 export async function POST(req: Request) {

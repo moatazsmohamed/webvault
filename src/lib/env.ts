@@ -35,6 +35,7 @@ const raw = {
   encKey: required('WEBVAULT_ENC_KEY', process.env.WEBVAULT_ENC_KEY),
   sessionSecret: required('WEBVAULT_SESSION_SECRET', process.env.WEBVAULT_SESSION_SECRET),
   setupKey: process.env.WEBVAULT_SETUP_KEY?.trim() ?? '',
+  inviteKey: process.env.WEBVAULT_INVITE_KEY?.trim() ?? '',
   appUrl: process.env.NEXT_PUBLIC_APP_URL?.trim() || '',
 };
 
@@ -48,6 +49,7 @@ export const env = {
   encKey: base64Key('WEBVAULT_ENC_KEY', raw.encKey),
   sessionSecret: raw.sessionSecret,
   setupKey: raw.setupKey,
+  inviteKey: raw.inviteKey,
   appUrl: raw.appUrl,
   isProd: process.env.NODE_ENV === 'production',
   get ready(): boolean {
